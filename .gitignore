@@ -1,0 +1,10 @@
+.DS_Store
+RetroAgent_Architecture_Design.pdf
+.venv
+aizynthfinder-master
+mini-swe-agent-main
+__pycache__/
+.claude
+
+# Local config overrides (API keys, model selection)
+retroagent/config/config.local.yaml
