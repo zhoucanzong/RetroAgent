@@ -8,3 +8,7 @@ __pycache__/
 
 # Local config overrides (API keys, model selection)
 retroagent/config/config.local.yaml
+
+# Model files (large, downloaded separately)
+models/*.onnx
+models/*.hdf5

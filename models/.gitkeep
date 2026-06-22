@@ -1,0 +1,3 @@
+# Place model files here. Download from:
+#   Zenodo 7797465:   uspto_model.onnx, uspto_filter_model.onnx, uspto_ringbreaker_model.onnx
+#   Figshare 12334577: full_uspto_03_05_19_unique_templates.hdf5, zinc_stock_17_04_20.hdf5
