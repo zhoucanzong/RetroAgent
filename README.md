@@ -1,10 +1,30 @@
 # RetroAgent
 
-基于 **LLM 中枢决策 + 专用化学工具** 的逆合成路线规划与手性配体设计系统。
+<div align="center">
 
-## 设计理念
+🧪 **LLM-driven retrosynthesis and chiral ligand design**
 
-> 智能只存在于 Planner（LLM）。专用化学模型（ONNX、模板库、库存、RDKit）退化为 Tool —— 纯函数，不做决策。
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+</div>
+
+RetroAgent 是一个基于 **LLM 中枢决策 + 专用化学工具** 的逆合成路线规划与手性配体设计系统。
+
+> 智能只存在于 **Planner（LLM）**。专用化学模型（ONNX、模板库、库存、RDKit）全部退化为 **Tool** —— 纯函数，不做决策。
+
+---
+
+## ✨ 核心能力
+
+| 模式 | 输入 | 核心工具链 | 输出 |
+|------|------|-----------|------|
+| **Retrosynthesis** | 目标分子 SMILES | `disconnect` → `propose` → `evaluate` → `check_stock` | 完整合成路线 |
+| **Ligand Design** | 自然语言约束 | `design_ligand` → `analyze_chirality` → `classify_ligand` | 候选手性配体 |
+| **Chiral Analysis** | 任意 SMILES | `analyze_chirality` + `classify_ligand` | 手性类型 / R/S / 配位原子 |
+
+---
+
+## 🏗️ 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -32,12 +52,14 @@
                     └───────────────────────┘
 ```
 
-## 架构参考
+### 架构参考
 
-- **mini-swe-agent**: Agent 控制循环、Environment 协议、异常体系
-- **AiZynthFinder**: ONNX 策略网络、USPTO 模板库、RDChiral 模板应用、ZINC 库存
+- **[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)**：Agent 控制循环、Environment 协议、异常体系
+- **[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder)**：ONNX 策略网络、USPTO 模板库、RDChiral 模板应用、ZINC 库存
 
-## 项目结构
+---
+
+## 📁 项目结构
 
 ```
 retroagent/
@@ -50,7 +72,7 @@ retroagent/
 │   └── __init__.py          # RetroEnvironment (工具分发器)
 ├── tools/
 │   ├── __init__.py          # RetroTool 协议
-│   ├── disconnect.py        # DisconnectionTool (ONNX 推理 + 官能团检测)
+│   ├── disconnect.py        # DisconnectionTool (ONNX 推理 + 官能团检测 + 环断裂)
 │   ├── propose.py           # ProposalTool (模板应用 + fallback 扫描)
 │   ├── evaluate.py          # EvaluationTool (可行性 + 库存评分)
 │   ├── stock.py             # StockTool (ZINC 库存查询)
@@ -68,15 +90,29 @@ retroagent/
     └── retro.py             # CLI 入口
 
 models/                      # 模型文件平铺存放（不提交到 Git）
-├── uspto_model.onnx                   # 扩展策略网络 (2048→42554)
-├── uspto_filter_model.onnx            # 反应可行性过滤网络
-├── uspto_ringbreaker_model.onnx       # 环断裂专用策略网络
-├── full_uspto_truncated_42554.hdf5    # USPTO 模板库（截断到 ONNX 维度）
-├── full_uspto_03_05_19_unique_templates.hdf5  # 原始 USPTO 模板库 (46,695 条)
-└── zinc_stock_17_04_20.hdf5           # ZINC 库存 (17.4M InChI Keys)
+├── uspto_model.onnx                       # 扩展策略网络 (2048→42554)
+├── uspto_filter_model.onnx                # 反应可行性过滤网络
+├── uspto_ringbreaker_model.onnx           # 环断裂专用策略网络
+├── full_uspto_truncated_42554.hdf5        # USPTO 模板库（截断到 ONNX 维度）
+├── full_uspto_03_05_19_unique_templates.hdf5  # 完整 USPTO 模板库 (46,695 条)
+├── uspto_unique_templates.csv             # USPTO 模板库（CSV 格式）
+├── uspto_ringbreaker_unique_templates.csv # 环断裂模板库
+└── zinc_stock_17_04_20.hdf5               # ZINC 库存 (17.4M InChI Keys)
 ```
 
-## 快速开始
+### 模型下载
+
+模型文件需手动下载并平铺放在 `models/` 目录下：
+
+- **Zenodo 7797465**：`uspto_model.onnx`, `uspto_filter_model.onnx`, `uspto_ringbreaker_model.onnx`
+- **Zenodo 7341155**：`uspto_unique_templates.csv.gz`, `uspto_ringbreaker_unique_templates.csv.gz`
+- **Figshare 12334577**：`zinc_stock.hdf5`, `full_uspto_03_05_19_unique_templates.hdf5`
+
+> 大文件不提交到 Git，见 `.gitignore`。
+
+---
+
+## 🚀 快速开始
 
 ### 环境要求
 
@@ -88,10 +124,10 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 ```bash
 cd RetroAgent
 python3 -m venv .venv
-.venv/bin/pip install rdkit onnxruntime h5py rdchiral jinja2 pydantic pyyaml typer pandas openai
+.venv/bin/pip install -r requirements.txt
 ```
 
-aizynthfinder 的 Python 版本要求 (<3.13) 与当前 Python 3.14 不兼容，因此项目通过文件系统直接导入其 `chem` 模块：
+> aizynthfinder 的 Python 版本要求 (`<3.13`) 与当前 Python 3.14 不兼容，因此项目通过文件系统直接导入其 `chem` 模块：
 
 ```python
 import sys
@@ -100,23 +136,22 @@ from aizynthfinder.chem import TreeMolecule
 from aizynthfinder.chem.reaction import TemplatedRetroReaction
 ```
 
-- https://figshare.com/articles/dataset/AiZynthFinder_a_fast_robust_and_flexible_open-source_software_for_retrosynthetic_planning/12334577
-- https://zenodo.org/records/7797465
-- https://zenodo.org/records/7341155
-- 模型和资料文件需手动平铺放在 `models/` 目录下（见 `.gitignore`，大文件不提交）。
-
 ### 配置
 
+创建本地覆盖文件（已加入 `.gitignore`）：
+
 ```bash
-# 创建本地覆盖文件（gitignored，放 API key）
 cat > retroagent/config/config.local.yaml << 'EOF'
 llm:
   api_key: "sk-..."
   model: "deepseek-v4-flash"
   base_url: "https://api.deepseek.com"
 EOF
+```
 
-# 或者用环境变量（优先级最高）
+或使用环境变量（优先级最高）：
+
+```bash
 export LLM_API_KEY="sk-..."
 export LLM_MODEL="gpt-4o"
 export LLM_BASE_URL="https://api.openai.com/v1"
@@ -124,21 +159,23 @@ export LLM_BASE_URL="https://api.openai.com/v1"
 
 配置加载优先级：**环境变量 > `config.local.yaml` > `default.yaml`**。
 
-### 运行工具测试
+---
+
+## 🛠️ 使用示例
+
+### 1. 工具测试（无需 API key）
 
 ```bash
 PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro test-tools "CC(=O)Oc1ccccc1C(=O)O"
 ```
 
-### LLM 驱动规划
-
-**逆合成模式（默认）**：
+### 2. 逆合成规划
 
 ```bash
 PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run "CC(=O)Oc1ccccc1C(=O)O"
 ```
 
-**手性配体设计模式**：
+### 3. 手性配体设计
 
 ```bash
 PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run \
@@ -146,15 +183,17 @@ PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run \
   --mode design
 ```
 
-保存轨迹：
+### 4. 保存轨迹
 
 ```bash
 PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run "..." -o /tmp/traj.json
 ```
 
-## 工作流说明
+---
 
-### 1. 逆合成工作流
+## 🔄 工作流说明
+
+### 逆合成工作流
 
 ```
 目标 SMILES
@@ -180,7 +219,7 @@ check_stock ──▶ 验证原料可及性
 全部前体 in stock ? 完成 : 递归展开
 ```
 
-### 2. 手性配体设计工作流
+### 手性配体设计工作流
 
 ```
 自然语言约束
@@ -201,23 +240,28 @@ evaluate + check_stock ──▶ 可行性与可及性
 LLM 选择最佳候选并提交
 ```
 
-## 当前状态
+---
+
+## 📊 当前状态
 
 | 阶段      | 状态   | 内容                                                                         |
 | --------- | ------ | ---------------------------------------------------------------------------- |
-| Phase 1.1 | ✓     | 项目骨架 + RetroTool 协议                                                    |
-| Phase 1.2 | ✓     | SharedBlackboard 状态容器                                                    |
-| Phase 1.3 | ✓     | RetroEnvironment 工具分发器 + BashTool                                       |
-| Phase 1.4 | ✓     | 5 个核心 Tool (disconnect/propose/evaluate/stock/literature/condition)       |
-| Phase 1.5 | ✓     | RetroPlanner 控制循环 + PlannerConfig + System Template                      |
-| Phase 1.6 | ✓     | 集成测试 — aspirin 合成                                                     |
-| Phase 1.7 | ✓     | YAML 配置系统 + 模型路径平铺 + OpenAI client                                 |
-| Phase 1.8 | ✓     | 手性配体设计扩展：ChiralityTool / LigandCategoryTool / ConditionalLigandTool |
-| Phase 2   | ✓     | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通）                              |
-| Phase 3   | 待启动 | Loop Engineering (Inner/Outer/Retrospective)                                 |
-| Phase 4   | 待启动 | 完整工具集 + Benchmark 评估                                                  |
+| Phase 1.1 | ✅     | 项目骨架 + RetroTool 协议                                                    |
+| Phase 1.2 | ✅     | SharedBlackboard 状态容器                                                    |
+| Phase 1.3 | ✅     | RetroEnvironment 工具分发器 + BashTool                                       |
+| Phase 1.4 | ✅     | 5 个核心 Tool (disconnect/propose/evaluate/stock/literature/condition)       |
+| Phase 1.5 | ✅     | RetroPlanner 控制循环 + PlannerConfig + System Template                      |
+| Phase 1.6 | ✅     | 集成测试 — aspirin 合成                                                     |
+| Phase 1.7 | ✅     | YAML 配置系统 + 模型路径平铺 + OpenAI client                                 |
+| Phase 1.8 | ✅     | 手性配体设计扩展：ChiralityTool / LigandCategoryTool / ConditionalLigandTool |
+| Phase 1.9 | ✅     | 环断裂策略网络 + 模板库接入                                                   |
+| Phase 2   | ✅     | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通）                              |
+| Phase 3   | ⏳     | Loop Engineering (Inner/Outer/Retrospective)                                 |
+| Phase 4   | ⏳     | 完整工具集 + Benchmark 评估                                                  |
 
-## 关键设计决策
+---
+
+## 🧠 关键设计决策
 
 1. **Tool 不做策略决策**：`propose(use_fallback=True)` 由 LLM 决定是否调用，Tool 不自动 fallback
 2. **Tool 诚实报告质量**：`disconnect` 返回 `matching` 标志 + 官能团分析，让 LLM 交叉验证
@@ -225,6 +269,12 @@ LLM 选择最佳候选并提交
 4. **LLM 不必微调**：Outer Loop 只更新 Tool 内部模型参数，LLM 保持通用推理能力
 5. **兼容非原生 tool-calling 的模型**：LLMClient 同时支持 OpenAI `tool_calls` 和文本 JSON 块解析，适配 DeepSeek 等模型
 
-## License
+---
+
+## 📜 License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+RetroAgent builds upon [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) (MIT) and
+[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder) (MIT), which remain under their
+respective licenses.

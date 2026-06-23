@@ -1,5 +1,4 @@
 .DS_Store
-RetroAgent_Architecture_Design.pdf
 .venv
 aizynthfinder-master
 mini-swe-agent-main
@@ -12,3 +11,6 @@ retroagent/config/config.local.yaml
 # Model files (large, downloaded separately)
 models/*.onnx
 models/*.hdf5
+models/uspto_ringbreaker_unique_templates.csv
+models/uspto_unique_templates.csv
+papers
