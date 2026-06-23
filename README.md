@@ -88,7 +88,7 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 ```bash
 cd RetroAgent
 python3 -m venv .venv
-.venv/bin/pip install rdkit onnxruntime h5py rdchiral jinja2 pydantic pyyaml typer pandas openai
+.venv/bin/pip install -r requirements.txt
 ```
 
 aizynthfinder 的 Python 版本要求 (<3.13) 与当前 Python 3.14 不兼容，因此项目通过文件系统直接导入其 `chem` 模块：
