@@ -18,6 +18,8 @@ models:
   templates_fallback: "full_uspto_03_05_19_unique_templates.hdf5"
   # ZINC stock database (InChI Keys)
   stock: "zinc_stock_17_04_20.hdf5"
+  # Ring-breaker templates (CSV format)
+  ringbreaker_templates: "uspto_ringbreaker_unique_templates.csv"
   # Path to CIC-DB conditional generation examples for design_ligand tool
   # Set this to enable LLM few-shot generation; if unset, deterministic fallback is used
   cic_db_conditional_examples: null

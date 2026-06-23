@@ -41,6 +41,7 @@ class DisconnectionTool:
     def __init__(self, model_path: str | Path, templates_path: str | Path,
                  cutoff_cumulative: float = 0.995, cutoff_number: int = 50,
                  ringbreaker_model_path: str | Path | None = None,
+                 ringbreaker_templates_path: str | Path | None = None,
                  fallback_min_matches: int = 3):
         self._model_path = str(model_path)
         self._templates_path = str(templates_path)
@@ -64,12 +65,13 @@ class DisconnectionTool:
             )
             self._templates = self._templates.iloc[:self._num_templates]
 
-        # Load ringbreaker model if available
+        # Load ringbreaker model + templates if available
         self._ringbreaker_session = None
+        self._ringbreaker_templates: pd.DataFrame | None = None
         if ringbreaker_model_path and Path(ringbreaker_model_path).exists():
             self._ringbreaker_session = onnxruntime.InferenceSession(str(ringbreaker_model_path))
-
-        self._cache: dict[str, np.ndarray] = {}
+        if ringbreaker_templates_path and Path(ringbreaker_templates_path).exists():
+            self._ringbreaker_templates = pd.read_csv(str(ringbreaker_templates_path), sep="\t")
 
     def execute(self, parameters: dict) -> str:
         smiles = parameters["smiles"]
@@ -131,6 +133,11 @@ class DisconnectionTool:
                 "matching": len(bond_indices) > 0,  # did substructure actually match?
             })
 
+        # Optionally merge ringbreaker predictions if molecule has rings
+        ringbreaker_bonds = self._ringbreaker_bonds(mol, fp)
+        if ringbreaker_bonds:
+            bonds.extend(ringbreaker_bonds)
+
         return {"bonds": bonds, "molecule_info": mol_info}
 
     def _morgan_fp(self, mol: Chem.Mol) -> np.ndarray:
@@ -139,6 +146,41 @@ class DisconnectionTool:
         from rdkit import DataStructs
         DataStructs.ConvertToNumpyArray(fp, arr[0])
         return arr
+
+    def _ringbreaker_bonds(self, mol: Chem.Mol, fp: np.ndarray) -> list[dict]:
+        """If the molecule contains rings and ringbreaker model/templates are loaded,
+        run the ringbreaker model and return additional bond suggestions."""
+        if mol.GetRingInfo().NumRings() == 0:
+            return []
+        if self._ringbreaker_session is None or self._ringbreaker_templates is None:
+            return []
+
+        rb_input_name = self._ringbreaker_session.get_inputs()[0].name
+        rb_output_name = self._ringbreaker_session.get_outputs()[0].name
+        predictions = self._ringbreaker_session.run(
+            [rb_output_name], {rb_input_name: fp.astype(np.float32)}
+        )[0][0]
+
+        idxs, probs = self._cutoff_predictions(predictions)
+        bonds = []
+        for rank, (tid, prob) in enumerate(zip(idxs, probs)):
+            if tid >= len(self._ringbreaker_templates):
+                continue
+            row = self._ringbreaker_templates.iloc[tid]
+            template_smarts = row["retro_template"]
+            classification = row.get("classification", "ringbreaker")
+            bond_indices = self._extract_bond_indices_from_template(mol, template_smarts)
+            bonds.append({
+                "rank": rank + 1,
+                "template_index": int(tid),
+                "score": round(float(prob), 6),
+                "template_smarts": template_smarts,
+                "classification": f"ringbreaker:{classification}",
+                "bond_indices": bond_indices,
+                "matching": len(bond_indices) > 0,
+                "source": "ringbreaker",
+            })
+        return bonds
 
     @staticmethod
     def _analyze_functional_groups(mol: Chem.Mol) -> dict:

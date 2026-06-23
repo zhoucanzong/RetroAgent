@@ -181,6 +181,7 @@ def _build_environment() -> RetroEnvironment:
             model_path=str(cfg.expansion_model_path),
             templates_path=str(cfg.templates_path) if cfg.templates_path else "",
             ringbreaker_model_path=str(cfg.ringbreaker_model_path) if cfg.ringbreaker_model_path else None,
+            ringbreaker_templates_path=str(cfg.ringbreaker_templates_path) if cfg.ringbreaker_templates_path else None,
         ))
 
     # Proposal tool (template application)

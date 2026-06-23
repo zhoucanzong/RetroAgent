@@ -92,6 +92,8 @@ class RetroAgentConfig:
 
     # --- CIC-DB / ligand design paths ---
     cic_db_conditional_examples_path: Path | None = None
+    # Ring-breaker templates (CSV)
+    ringbreaker_templates_path: Path | None = None
 
     # --- Environment ---
     env_timeout: int = 120
@@ -134,8 +136,9 @@ def load_config() -> RetroAgentConfig:
         templates_path=_resolve_model_path(models_section.get("templates")),
         templates_fallback_path=_resolve_model_path(models_section.get("templates_fallback")),
         stock_path=_resolve_model_path(models_section.get("stock")),
-        # CIC-DB
+        # CIC-DB / ringbreaker templates
         cic_db_conditional_examples_path=_resolve_model_path(models_section.get("cic_db_conditional_examples")),
+        ringbreaker_templates_path=_resolve_model_path(models_section.get("ringbreaker_templates")),
         # LLM
         llm_model=llm_section.get("model", "deepseek-v4-flash"),
         llm_base_url=llm_section.get("base_url", "https://api.deepseek.com"),

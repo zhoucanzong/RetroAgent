@@ -88,7 +88,7 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 ```bash
 cd RetroAgent
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install rdkit onnxruntime h5py rdchiral jinja2 pydantic pyyaml typer pandas openai
 ```
 
 aizynthfinder 的 Python 版本要求 (<3.13) 与当前 Python 3.14 不兼容，因此项目通过文件系统直接导入其 `chem` 模块：
@@ -100,7 +100,10 @@ from aizynthfinder.chem import TreeMolecule
 from aizynthfinder.chem.reaction import TemplatedRetroReaction
 ```
 
-模型文件需手动平铺放在 `models/` 目录下（见 `.gitignore`，大文件不提交）。
+- https://figshare.com/articles/dataset/AiZynthFinder_a_fast_robust_and_flexible_open-source_software_for_retrosynthetic_planning/12334577
+- https://zenodo.org/records/7797465
+- https://zenodo.org/records/7341155
+- 模型和资料文件需手动平铺放在 `models/` 目录下（见 `.gitignore`，大文件不提交）。
 
 ### 配置
 
