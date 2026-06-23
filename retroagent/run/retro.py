@@ -56,7 +56,21 @@ class LLMClient:
                     stream=False,
                 )
                 if tools:
-                    kwargs["tools"] = tools
+                    # Convert internal specs to OpenAI tool schema if needed
+                    openai_tools = []
+                    for t in tools:
+                        if "function" in t:
+                            openai_tools.append(t)
+                        else:
+                            openai_tools.append({
+                                "type": "function",
+                                "function": {
+                                    "name": t["name"],
+                                    "description": t["description"],
+                                    "parameters": t.get("parameters", {"type": "object", "properties": {}}),
+                                },
+                            })
+                    kwargs["tools"] = openai_tools
                     kwargs["tool_choice"] = "auto"
 
                 response = self.client.chat.completions.create(**kwargs)
@@ -68,7 +82,7 @@ class LLMClient:
                 msg = response.choices[0].message
                 content = msg.content or ""
 
-                # Parse tool calls
+                # Parse tool calls from native function-calling
                 raw_tool_calls = getattr(msg, "tool_calls", None) or []
                 actions = []
                 for tc in raw_tool_calls:
@@ -80,6 +94,11 @@ class LLMClient:
                         "tool": tc.function.name,
                         "parameters": args,
                     })
+
+                # Fallback: parse JSON action blocks from markdown text
+                # (useful for models that do not reliably emit native tool_calls)
+                if not actions:
+                    actions = self._parse_actions_from_text(content)
 
                 if actions:
                     content += "\n[Tool calls: " + ", ".join(a["tool"] for a in actions) + "]"
@@ -120,6 +139,31 @@ class LLMClient:
                     raise RuntimeError(f"LLM call failed after {self.max_retries + 1} attempts: {e}")
 
         raise RuntimeError("LLM query failed — unreachable")
+
+    @staticmethod
+    def _parse_actions_from_text(content: str) -> list[dict]:
+        """Parse tool calls from markdown JSON blocks in the LLM response.
+
+        Supports two patterns:
+        1. A single ```json block containing a list of actions:
+           [{"tool": "...", "parameters": {...}}, ...]
+        2. A single ```json block containing one action object:
+           {"tool": "...", "parameters": {...}}
+        """
+        import re
+        actions = []
+        for block in re.findall(r"```json\s*(.*?)\s*```", content, re.DOTALL):
+            try:
+                data = json.loads(block)
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and "tool" in item:
+                            actions.append({"tool": item["tool"], "parameters": item.get("parameters", {})})
+                elif isinstance(data, dict) and "tool" in data:
+                    actions.append({"tool": data["tool"], "parameters": data.get("parameters", {})})
+            except json.JSONDecodeError:
+                continue
+        return actions
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +277,7 @@ def run(
         max_search_depth=cfg.agent_max_search_depth,
         search_strategy=cfg.agent_search_strategy,
         max_consecutive_format_errors=cfg.agent_max_consecutive_format_errors,
+        output_path=output,
     )
 
     print(f"\n{'='*60}")
@@ -246,15 +291,6 @@ def run(
     print(f"\nResult: exit_status={result.get('exit_status')}")
 
     if output:
-        import yaml
-        trailer = {
-            "task": task,
-            "mode": mode,
-            "model": llm_model,
-            "exit_status": result.get("exit_status"),
-        }
-        with open(output, "w") as f:
-            yaml.dump(trailer, f)
         print(f"Trajectory saved to {output}")
 
 

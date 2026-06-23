@@ -85,7 +85,14 @@ agent:
     {% endif %}
 
     ### Important Rules
-    - Every response MUST include at least ONE tool call
+    - Every response MUST include at least ONE tool call (except when you are ready to submit the final answer)
+    - When calling tools, output a single ```json code block containing either one action object or a list of action objects
+    - Each action object must have exactly two keys: `tool` and `parameters`
+    - Example:
+      ```json
+      [{"tool": "design_ligand", "parameters": {"constraints": "Point chirality ligand with P and O donor atoms", "count": 3}}]
+      ```
+    - When you have a final answer, include the literal string `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` followed by the answer
     - Always explain your reasoning before making tool calls
 
   instance_template: |
