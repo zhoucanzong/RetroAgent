@@ -224,4 +224,8 @@ LLM 选择最佳候选并提交
 
 ## License
 
-MIT
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+RetroAgent builds upon [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) (MIT) and
+[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder) (MIT), which remain under their
+respective licenses.
