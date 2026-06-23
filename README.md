@@ -200,19 +200,19 @@ LLM 选择最佳候选并提交
 
 ## 当前状态
 
-| 阶段 | 状态 | 内容 |
-|------|------|------|
-| Phase 1.1 | ✓ | 项目骨架 + RetroTool 协议 |
-| Phase 1.2 | ✓ | SharedBlackboard 状态容器 |
-| Phase 1.3 | ✓ | RetroEnvironment 工具分发器 + BashTool |
-| Phase 1.4 | ✓ | 5 个核心 Tool (disconnect/propose/evaluate/stock/literature/condition) |
-| Phase 1.5 | ✓ | RetroPlanner 控制循环 + PlannerConfig + System Template |
-| Phase 1.6 | ✓ | 集成测试 — aspirin 合成 |
-| Phase 1.7 | ✓ | YAML 配置系统 + 模型路径平铺 + OpenAI client |
-| Phase 1.8 | ✓ | 手性配体设计扩展：ChiralityTool / LigandCategoryTool / ConditionalLigandTool |
-| Phase 2 | ✓ | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通） |
-| Phase 3 | 待启动 | Loop Engineering (Inner/Outer/Retrospective) |
-| Phase 4 | 待启动 | 完整工具集 + Benchmark 评估 |
+| 阶段      | 状态   | 内容                                                                         |
+| --------- | ------ | ---------------------------------------------------------------------------- |
+| Phase 1.1 | ✓     | 项目骨架 + RetroTool 协议                                                    |
+| Phase 1.2 | ✓     | SharedBlackboard 状态容器                                                    |
+| Phase 1.3 | ✓     | RetroEnvironment 工具分发器 + BashTool                                       |
+| Phase 1.4 | ✓     | 5 个核心 Tool (disconnect/propose/evaluate/stock/literature/condition)       |
+| Phase 1.5 | ✓     | RetroPlanner 控制循环 + PlannerConfig + System Template                      |
+| Phase 1.6 | ✓     | 集成测试 — aspirin 合成                                                     |
+| Phase 1.7 | ✓     | YAML 配置系统 + 模型路径平铺 + OpenAI client                                 |
+| Phase 1.8 | ✓     | 手性配体设计扩展：ChiralityTool / LigandCategoryTool / ConditionalLigandTool |
+| Phase 2   | ✓     | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通）                              |
+| Phase 3   | 待启动 | Loop Engineering (Inner/Outer/Retrospective)                                 |
+| Phase 4   | 待启动 | 完整工具集 + Benchmark 评估                                                  |
 
 ## 关键设计决策
 
@@ -225,7 +225,3 @@ LLM 选择最佳候选并提交
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
-
-RetroAgent builds upon [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) (MIT) and
-[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder) (MIT), which remain under their
-respective licenses.
