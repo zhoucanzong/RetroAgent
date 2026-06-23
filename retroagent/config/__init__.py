@@ -90,6 +90,9 @@ class RetroAgentConfig:
     agent_search_strategy: str = "auto"
     agent_max_consecutive_format_errors: int = 3
 
+    # --- CIC-DB / ligand design paths ---
+    cic_db_conditional_examples_path: Path | None = None
+
     # --- Environment ---
     env_timeout: int = 120
 
@@ -131,6 +134,8 @@ def load_config() -> RetroAgentConfig:
         templates_path=_resolve_model_path(models_section.get("templates")),
         templates_fallback_path=_resolve_model_path(models_section.get("templates_fallback")),
         stock_path=_resolve_model_path(models_section.get("stock")),
+        # CIC-DB
+        cic_db_conditional_examples_path=_resolve_model_path(models_section.get("cic_db_conditional_examples")),
         # LLM
         llm_model=llm_section.get("model", "deepseek-v4-flash"),
         llm_base_url=llm_section.get("base_url", "https://api.deepseek.com"),

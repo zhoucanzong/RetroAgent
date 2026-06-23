@@ -77,14 +77,18 @@ class RetroPlanner:
         self.messages.extend(messages)
         return list(messages)
 
-    def run(self, task: str = "", **kwargs) -> dict:
-        """Main entry point. Run the planning loop until completion."""
-        self.extra_template_vars |= {"task": task, **kwargs}
+    def run(self, task: str = "", mode: str = "retrosynthesis", **kwargs) -> dict:
+        """Main entry point. Supports two modes:
+
+        - 'retrosynthesis': given a target SMILES, plan a synthetic route.
+        - 'design': given natural-language constraints, design a molecule/ligand.
+        """
+        self.extra_template_vars |= {"task": task, "mode": mode, **kwargs}
         self.messages = []
 
         # Initialize blackboard if target provided
         if task:
-            self.blackboard.initialize(task)
+            self.blackboard.initialize(task, mode=mode)
 
         # Add system and user messages
         system_content = self._render_template(self.config.system_template)

@@ -27,9 +27,13 @@ class SharedBlackboard:
     num_atoms: int = 0
     rings: int = 0
     functional_groups: list[str] = field(default_factory=list)
+    mode: str = "retrosynthesis"
+    design_candidates: list[dict] = field(default_factory=list)
+    design_evaluations: list[dict] = field(default_factory=list)
 
-    def initialize(self, smiles: str) -> None:
+    def initialize(self, smiles: str, mode: str = "retrosynthesis") -> None:
         self.target_smiles = smiles
+        self.mode = mode
         self.start_time = time.time()
         self.iteration_count = 0
         self.routes.clear()
@@ -38,6 +42,8 @@ class SharedBlackboard:
         self.literature_precedents.clear()
         self.disconnection_results.clear()
         self.proposal_results.clear()
+        self.design_candidates.clear()
+        self.design_evaluations.clear()
         try:
             from rdkit import Chem
             mol = Chem.MolFromSmiles(smiles)
@@ -60,6 +66,9 @@ class SharedBlackboard:
                 "literature_count": len(self.literature_precedents),
                 "disconnections": len(self.disconnection_results),
                 "proposals": len(self.proposal_results),
+                "mode": self.mode,
+                "design_candidates": len(self.design_candidates),
+                "design_evaluations": len(self.design_evaluations),
                 "iteration": self.iteration_count,
                 "elapsed": f"{elapsed:.1f}s",
             }
@@ -80,3 +89,9 @@ class SharedBlackboard:
             case "check_stock":
                 for smi, src in result.get("in_stock", {}).items():
                     self.stock_hits[smi] = src
+            case "analyze_chirality":
+                self.design_evaluations.append({"tool": "analyze_chirality", "result": result})
+            case "classify_ligand":
+                self.design_evaluations.append({"tool": "classify_ligand", "result": result})
+            case "design_ligand":
+                self.design_candidates.extend(result.get("candidates", []))

@@ -17,6 +17,9 @@ from retroagent.tools.evaluate import EvaluationTool
 from retroagent.tools.stock import StockTool
 from retroagent.tools.literature import LiteratureTool
 from retroagent.tools.condition import ConditionTool
+from retroagent.tools.chirality import ChiralityTool
+from retroagent.tools.ligand_category import LigandCategoryTool
+from retroagent.tools.conditional_ligand import ConditionalLigandTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -161,6 +164,18 @@ def _build_environment() -> RetroEnvironment:
     # Condition tool (always available, rule-based)
     env.register("recommend_conditions", ConditionTool())
 
+    # New: chiral ligand design tools (always available, lightweight)
+    env.register("analyze_chirality", ChiralityTool())
+    env.register("classify_ligand", LigandCategoryTool())
+    # Conditional ligand design tool with optional CIC-DB few-shot examples
+    design_tool = ConditionalLigandTool(
+        examples_path=str(cfg.cic_db_conditional_examples_path)
+        if cfg.cic_db_conditional_examples_path and cfg.cic_db_conditional_examples_path.exists()
+        else None,
+        n_examples=3,
+    )
+    env.register("design_ligand", design_tool)
+
     return env
 
 
@@ -170,14 +185,15 @@ def _build_environment() -> RetroEnvironment:
 
 @app.command()
 def run(
-    smiles: str = typer.Argument(..., help="Target molecule SMILES"),
+    task: str = typer.Argument(..., help="Target molecule SMILES or design constraints"),
+    mode: str = typer.Option("retrosynthesis", "--mode", help="Mode: retrosynthesis | design"),
     model: str | None = typer.Option(None, "-m", "--model", help="LLM model name (overrides config)"),
     api_key: str | None = typer.Option(None, "--api-key", help="API key (overrides config)"),
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL (overrides config)"),
     output: Path | None = typer.Option(None, "-o", "--output", help="Save trajectory to file"),
     max_steps: int = typer.Option(30, "--max-steps", help="Maximum planning steps"),
 ) -> None:
-    """Run LLM-driven retrosynthetic planning on a target SMILES."""
+    """Run LLM-driven planning or design on a target SMILES / constraints."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 
     cfg = get_config()
@@ -220,18 +236,20 @@ def run(
     )
 
     print(f"\n{'='*60}")
-    print(f"RetroAgent v0.1 — Target: {smiles}")
+    print(f"RetroAgent v0.1 — Mode: {mode}")
+    print(f"Task: {task}")
     print(f"Model: {llm_model}")
     print(f"Tools available: {[t['name'] for t in env.get_tools_spec()]}")
     print(f"{'='*60}\n")
 
-    result = planner.run(task=smiles)
+    result = planner.run(task=task, mode=mode)
     print(f"\nResult: exit_status={result.get('exit_status')}")
 
     if output:
         import yaml
         trailer = {
-            "target": smiles,
+            "task": task,
+            "mode": mode,
             "model": llm_model,
             "exit_status": result.get("exit_status"),
         }

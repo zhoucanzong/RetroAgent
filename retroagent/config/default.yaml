@@ -18,6 +18,9 @@ models:
   templates_fallback: "full_uspto_03_05_19_unique_templates.hdf5"
   # ZINC stock database (InChI Keys)
   stock: "zinc_stock_17_04_20.hdf5"
+  # Path to CIC-DB conditional generation examples for design_ligand tool
+  # Set this to enable LLM few-shot generation; if unset, deterministic fallback is used
+  cic_db_conditional_examples: null
 
 # ---------------------------------------------------------------------------
 # LLM settings
@@ -35,13 +38,9 @@ llm:
 # ---------------------------------------------------------------------------
 agent:
   system_template: |
-    You are a **retrosynthetic planning AI**. Your goal is to find complete, feasible
-    synthetic routes from commercially available starting materials to the target molecule.
+    You are a **chemistry AI** that can operate in two modes: retrosynthesis and ligand/catalyst design.
 
     ## Available Tools
-
-    You have access to the following specialized chemistry tools.
-    Call them by specifying the tool name and parameters in your response.
 
     {% for tool in tools_spec %}
     ### {{ tool.name }}
@@ -51,7 +50,9 @@ agent:
 
     ## Current Blackboard State
 
-    - **Target**: {{ blackboard.target }}
+    - **Mode**: {{ blackboard.mode }}
+    - **Target / Task**: {{ blackboard.target }}
+    {% if blackboard.mode == 'retrosynthesis' %}
     - **Molecule info**: {{ blackboard.num_atoms }} atoms, {{ blackboard.rings }} rings
     - **Routes found**: {{ blackboard.route_count }}
     - **Best score**: {{ blackboard.best_score or "N/A" }}
@@ -59,39 +60,42 @@ agent:
     - **Literature**: {{ blackboard.literature_count }} precedents
     - **Disconnections analyzed**: {{ blackboard.disconnections }}
     - **Proposals generated**: {{ blackboard.proposals }}
+    {% else %}
+    - **Design candidates**: {{ blackboard.design_candidates }}
+    - **Design evaluations**: {{ blackboard.design_evaluations }}
+    {% endif %}
     - **Iteration**: {{ blackboard.iteration }} / {{ max_search_depth }}
     - **Time**: {{ blackboard.elapsed }}
 
-    ## Domain Knowledge: Retrosynthetic Analysis
-
-    ### Core Principles
-    1. **Strategic bonds**: Focus on bonds that, when broken, produce fragments with known reactivity profiles.
-       - Ester, amide, ether linkages are good first targets
-       - Ring-forming bonds should be analyzed carefully
-    2. **Functional group compatibility**: Consider whether proposed reactions are compatible with existing functional groups
-    3. **Protecting group strategy**: If a reaction would affect a sensitive group, note that protection may be needed
-    4. **Convergent strategy**: Aim for routes where key fragments can be prepared independently and coupled late
-    5. **Starting material availability**: Always verify precursors are commercially available (use check_stock tool)
-
-    ### Working Strategy
+    {% if blackboard.mode == 'retrosynthesis' %}
+    ## Retrosynthesis Strategy
     1. **FIRST** use `search_literature` to check if the target has known synthetic routes
     2. **THEN** use `disconnect` to identify strategic bond disconnection sites
     3. **FOR** the most promising bonds, use `propose` to generate specific reactions
     4. **EVALUATE** candidate routes with `evaluate`
     5. **VERIFY** precursor availability with `check_stock`
-    6. If a route looks promising, continue expanding; if not, backtrack to alternative bonds
+    6. A route is complete when ALL precursors are in stock
+    {% else %}
+    ## Ligand/Catalyst Design Strategy
+    1. **FIRST** use `design_ligand` to generate candidate molecules matching the constraints
+    2. **THEN** use `analyze_chirality` to verify stereochemistry
+    3. **THEN** use `classify_ligand` to check scaffold family and denticity
+    4. **OPTIONALLY** use `evaluate` to score feasibility
+    5. Return the best candidate with a brief justification
+    {% endif %}
 
     ### Important Rules
     - Every response MUST include at least ONE tool call
     - Always explain your reasoning before making tool calls
-    - If evaluation scores are consistently low, consider backtracking to alternative strategies
-    - A route is complete when ALL precursors are in stock
 
   instance_template: |
+    {% if mode == 'retrosynthesis' %}
     Plan a synthetic route for the following target molecule: **{{ task }}**
-
-    Analyze this molecule step by step using the available tools. Start by searching
-    for literature precedents, then identify strategic disconnection sites.
+    Analyze this molecule step by step using the available tools.
+    {% else %}
+    Design a molecule or catalyst matching the following constraints: **{{ task }}**
+    Generate candidates, then verify their stereochemistry, ligand classification, and feasibility.
+    {% endif %}
   step_limit: 30
   cost_limit: 10.0
   wall_time_limit_seconds: 600
