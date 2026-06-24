@@ -104,6 +104,23 @@ class RetroAgentConfig:
     agent_max_repeated_actions: int = 2
     agent_enable_schema_validation: bool = True
 
+    # --- Dead-Loop Monitor (Phase 0) ---
+    agent_enable_dead_loop_monitor: bool = True
+    agent_cycling_window: int = 6
+    agent_stagnation_rounds: int = 5
+    agent_semantic_repeat_threshold: int = 3
+    agent_enable_early_exit_hint: bool = True
+    agent_early_exit_score_threshold: float = 0.7
+
+    # --- Enhanced Observation (Phase 2) ---
+    agent_enable_enhanced_observation: bool = True
+
+    # --- Auto-tune (Phase 3) ---
+    agent_enable_auto_tune: bool = True
+
+    # --- Design Auditor (Phase 0F) ---
+    agent_enable_design_auditor: bool = True
+
     # --- Environment ---
     env_timeout: int = 120
 
@@ -174,6 +191,19 @@ def load_config() -> RetroAgentConfig:
         agent_enable_repeated_action_guard=agent_section.get("enable_repeated_action_guard", True),
         agent_max_repeated_actions=agent_section.get("max_repeated_actions", 2),
         agent_enable_schema_validation=agent_section.get("enable_schema_validation", True),
+        # Dead-Loop Monitor (Phase 0)
+        agent_enable_dead_loop_monitor=agent_section.get("enable_dead_loop_monitor", True),
+        agent_cycling_window=agent_section.get("cycling_window", 6),
+        agent_stagnation_rounds=agent_section.get("stagnation_rounds", 5),
+        agent_semantic_repeat_threshold=agent_section.get("semantic_repeat_threshold", 3),
+        agent_enable_early_exit_hint=agent_section.get("enable_early_exit_hint", True),
+        agent_early_exit_score_threshold=agent_section.get("early_exit_score_threshold", 0.7),
+        # Enhanced Observation (Phase 2)
+        agent_enable_enhanced_observation=agent_section.get("enable_enhanced_observation", True),
+        # Auto-tune (Phase 3)
+        agent_enable_auto_tune=agent_section.get("enable_auto_tune", True),
+        # Design Auditor (Phase 0F)
+        agent_enable_design_auditor=agent_section.get("enable_design_auditor", True),
         # Environment
         env_timeout=env_section.get("timeout", 120),
     )

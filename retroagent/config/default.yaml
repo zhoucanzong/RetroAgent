@@ -69,6 +69,11 @@ agent:
     - **Iteration**: {{ blackboard.iteration }} / {{ max_search_depth }}
     - **Time**: {{ blackboard.elapsed }}
 
+    {% if blackboard.mode == 'retrosynthesis' and blackboard.branch_count > 0 %}
+    ### Branch Exploration Status
+    {{ blackboard.branch_table }}
+    {% endif %}
+
     {% if blackboard.mode == 'retrosynthesis' %}
     ## Retrosynthesis Strategy
     1. **FIRST** use `search_literature` to check if the target has known synthetic routes
@@ -76,18 +81,35 @@ agent:
     3. **FOR** the most promising bonds, use `propose` to generate specific reactions
     4. **EVALUATE** candidate routes with `evaluate`
     5. **VERIFY** precursor availability with `check_stock`
-    6. A route is complete when ALL precursors are in stock
+    6. A route is complete when ALL precursors are **either in stock OR can be made in ONE trivial step from stock reagents**
+    7. If a precursor is not in stock but is a simple molecule (e.g. common ester, anhydride, acid chloride), do NOT discard the route -- instead propose a 1-step synthesis from in-stock building blocks
+    8. You have ample steps available (step_limit=100). Feel free to explore alternative routes deeply and recursively expand precursors that are not immediately available
     {% else %}
     ## Ligand/Catalyst Design Strategy
     1. **FIRST** use `design_ligand` to generate candidate molecules matching the constraints
     2. **THEN** use `analyze_chirality` to verify stereochemistry
     3. **THEN** use `classify_ligand` to check scaffold family and denticity
-    4. **OPTIONALLY** use `evaluate` to score feasibility
-    5. Return the best candidate with a brief justification
+    4. **THEN** use `check_stock` to verify precursor availability
+    5. **THEN** use `evaluate` to score synthetic feasibility
+    6. After validation, the system will run a **Design Auditor** to catch chemical errors before submission
+    7. Address ALL auditor issues before submitting; CRITICAL issues must be resolved
     {% endif %}
+
+    ### Think Tool — Your Reasoning Workspace
+    Use the `think` tool BEFORE making any major decisions:
+    - **Before choosing bonds to disconnect**: analyze functional group compatibility and template matching quality
+    - **Before calling evaluate**: predict expected scores and note concerns about specific precursors
+    - **Before deciding to submit**: audit the route for completeness (all precursors in stock? chirality addressed?)
+    - **When results are surprising**: reason about why (e.g., low feasibility despite matched templates) and whether to backtrack
+    - **When stuck between options**: compare alternatives explicitly
+
+    The `think` tool does NOT count as an action step — use it freely.
+    Good: think → disconnect → think about results → propose → think about precursors → evaluate
+    Bad: disconnect → propose → evaluate → submit (no explicit reasoning between steps)
 
     ### Important Rules
     - Every response MUST include at least ONE tool call (except when you are ready to submit the final answer)
+    - You may call `think` and an action tool together in the same response (multiple tool_calls)
     - When calling tools, output a single ```json code block containing either one action object or a list of action objects
     - Each action object must have exactly two keys: `tool` and `parameters`
     - Example:
@@ -105,7 +127,7 @@ agent:
     Design a molecule or catalyst matching the following constraints: **{{ task }}**
     Generate candidates, then verify their stereochemistry, ligand classification, and feasibility.
     {% endif %}
-  step_limit: 30
+  step_limit: 100
   cost_limit: 10.0
   wall_time_limit_seconds: 600
   max_search_depth: 20
@@ -119,6 +141,23 @@ agent:
   enable_repeated_action_guard: true
   max_repeated_actions: 2
   enable_schema_validation: true
+
+  # Dead-Loop Monitor (Phase 0)
+  enable_dead_loop_monitor: true
+  cycling_window: 6
+  stagnation_rounds: 5
+  semantic_repeat_threshold: 3
+  enable_early_exit_hint: true
+  early_exit_score_threshold: 0.7
+
+  # Enhanced Observation (Phase 2)
+  enable_enhanced_observation: true
+
+  # Auto-tune (Phase 3)
+  enable_auto_tune: true
+
+  # Design Auditor (Phase 0F)
+  enable_design_auditor: true
 
 # ---------------------------------------------------------------------------
 # Environment settings

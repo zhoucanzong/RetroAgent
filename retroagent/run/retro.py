@@ -20,6 +20,7 @@ from retroagent.tools.condition import ConditionTool
 from retroagent.tools.chirality import ChiralityTool
 from retroagent.tools.ligand_category import LigandCategoryTool
 from retroagent.tools.conditional_ligand import ConditionalLigandTool
+from retroagent.tools.think import ThinkTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -105,8 +106,14 @@ class LLMClient:
 
                 # Check for completion signal
                 if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in content:
+                    # When COMPLETE_TASK is in content, return as assistant with exit_status
+                    # so the planner's query() adds it to messages as assistant role
+                    # and run() detects completion from extra dict
+                    actions_text = ", ".join(a["tool"] for a in actions) if actions else ""
+                    if actions_text:
+                        content += f"\n[Tool calls: {actions_text}]"
                     return {
-                        "role": "exit",
+                        "role": "assistant",
                         "content": content,
                         "extra": {
                             "actions": actions,
@@ -221,6 +228,9 @@ def _build_environment() -> RetroEnvironment:
     )
     env.register("design_ligand", design_tool)
 
+    # Phase 1: Think Tool — always registered (pure text, no model files needed)
+    env.register("think", ThinkTool())
+
     return env
 
 
@@ -236,7 +246,7 @@ def run(
     api_key: str | None = typer.Option(None, "--api-key", help="API key (overrides config)"),
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL (overrides config)"),
     output: Path | None = typer.Option(None, "-o", "--output", help="Save trajectory to file"),
-    max_steps: int = typer.Option(30, "--max-steps", help="Maximum planning steps"),
+    max_steps: int = typer.Option(100, "--max-steps", help="Maximum planning steps"),
 ) -> None:
     """Run LLM-driven planning or design on a target SMILES / constraints."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
@@ -286,6 +296,19 @@ def run(
         enable_repeated_action_guard=cfg.agent_enable_repeated_action_guard,
         max_repeated_actions=cfg.agent_max_repeated_actions,
         enable_schema_validation=cfg.agent_enable_schema_validation,
+        # Dead-Loop Monitor (Phase 0)
+        enable_dead_loop_monitor=cfg.agent_enable_dead_loop_monitor,
+        cycling_window=cfg.agent_cycling_window,
+        stagnation_rounds=cfg.agent_stagnation_rounds,
+        semantic_repeat_threshold=cfg.agent_semantic_repeat_threshold,
+        enable_early_exit_hint=cfg.agent_enable_early_exit_hint,
+        early_exit_score_threshold=cfg.agent_early_exit_score_threshold,
+        # Enhanced Observation (Phase 2)
+        enable_enhanced_observation=cfg.agent_enable_enhanced_observation,
+        # Auto-tune (Phase 3)
+        enable_auto_tune=cfg.agent_enable_auto_tune,
+        # Design Auditor (Phase 0F)
+        enable_design_auditor=cfg.agent_enable_design_auditor,
     )
 
     print(f"\n{'='*60}")

@@ -13,7 +13,7 @@ class PlannerConfig(BaseModel):
     instance_template: str = "Plan a synthetic route for the following molecule: {{task}}"
     """Template for the first user message specifying the target."""
 
-    step_limit: int = 30
+    step_limit: int = 100
     """Maximum number of Planner steps (LLM calls + tool executions)."""
 
     cost_limit: float = 5.0
@@ -55,3 +55,34 @@ class PlannerConfig(BaseModel):
 
     enable_schema_validation: bool = True
     """Validate LLM tool parameters against declared JSON schemas before execution."""
+
+    # --- Dead-Loop Monitor (Phase 0) ---
+    enable_dead_loop_monitor: bool = True
+    """Enable detection of tool-type cycling, semantic repeats, and stagnation."""
+
+    cycling_window: int = 6
+    """Sliding window size for tool-type cycling detection."""
+
+    stagnation_rounds: int = 5
+    """Rounds without substantive progress before stagnation warning."""
+
+    semantic_repeat_threshold: int = 3
+    """Max same-(tool, semantic_key) calls before warning."""
+
+    enable_early_exit_hint: bool = True
+    """Inject a hint when route quality is good enough to submit."""
+
+    early_exit_score_threshold: float = 0.7
+    """Score threshold for early exit hint."""
+
+    # --- Enhanced Observation (Phase 2) ---
+    enable_enhanced_observation: bool = True
+    """Replace simple reflection with structured observation+reasoning prompts."""
+
+    # --- Auto-tune (Phase 3) ---
+    enable_auto_tune: bool = True
+    """Auto-adjust step_limit and other params based on molecular complexity."""
+
+    # --- Design Auditor (Phase 0F) ---
+    enable_design_auditor: bool = True
+    """In design mode, run an adversarial chemical correctness review of catalyst/ligand designs."""

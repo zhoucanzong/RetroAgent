@@ -1,4 +1,7 @@
-"""SharedBlackboard — pure state container, no decision logic."""
+"""SharedBlackboard — pure state container, no decision logic.
+
+Phase 4: Branch tracking for route exploration status table.
+"""
 
 import time
 from dataclasses import dataclass, field
@@ -31,6 +34,12 @@ class SharedBlackboard:
     design_candidates: list[dict] = field(default_factory=list)
     design_evaluations: list[dict] = field(default_factory=list)
 
+    # Phase 4: Branch tracking for route exploration status
+    # Each branch: {id, bond_name, template_index, classification, best_score,
+    #               precursor_count, stock_count, status}
+    # status: "exploring" | "evaluated" | "high_score" | "submitted" | "abandoned"
+    branches: list[dict] = field(default_factory=list)
+
     def initialize(self, smiles: str, mode: str = "retrosynthesis") -> None:
         self.target_smiles = smiles
         self.mode = mode
@@ -44,6 +53,7 @@ class SharedBlackboard:
         self.proposal_results.clear()
         self.design_candidates.clear()
         self.design_evaluations.clear()
+        self.branches.clear()
         try:
             from rdkit import Chem
             mol = Chem.MolFromSmiles(smiles)
@@ -55,6 +65,8 @@ class SharedBlackboard:
 
     def to_template_vars(self) -> dict:
         elapsed = time.time() - self.start_time if self.start_time else 0
+        # Build branch status table
+        branch_table = self._build_branch_table()
         return {
             "blackboard": {
                 "target": self.target_smiles,
@@ -71,6 +83,9 @@ class SharedBlackboard:
                 "design_evaluations": len(self.design_evaluations),
                 "iteration": self.iteration_count,
                 "elapsed": f"{elapsed:.1f}s",
+                # Phase 4: branch tracking
+                "branch_count": len(self.branches),
+                "branch_table": branch_table,
             }
         }
 
@@ -95,3 +110,62 @@ class SharedBlackboard:
                 self.design_evaluations.append({"tool": "classify_ligand", "result": result})
             case "design_ligand":
                 self.design_candidates.extend(result.get("candidates", []))
+
+    def _build_branch_table(self) -> str:
+        """Build a Markdown branch exploration status table."""
+        if not self.branches:
+            return "_No branches tracked yet._"
+
+        lines = [
+            "| # | Bond / Template | Class | Best Score | Stock | Status |",
+            "|---|-----------------|-------|------------|-------|--------|",
+        ]
+        for i, b in enumerate(self.branches[:10], 1):
+            bond = b.get("bond_name", f"T#{b.get('template_index', '?')}")
+            if len(bond) > 20:
+                bond = bond[:17] + "..."
+            cls = b.get("classification", "?")
+            if len(cls) > 8:
+                cls = cls[:5] + "..."
+            score = b.get("best_score")
+            score_str = f"{score:.3f}" if score is not None else "—"
+            stock = f"{b.get('stock_count', 0)}/{b.get('precursor_count', '?')}"
+            status = b.get("status", "exploring")
+            status_icon = {
+                "exploring": "🔍 exploring",
+                "evaluated": "📊 evaluated",
+                "high_score": "⭐ high",
+                "submitted": "✅ submitted",
+                "abandoned": "❌ abandoned",
+            }.get(status, status)
+            lines.append(f"| {i} | {bond} | {cls} | {score_str} | {stock} | {status_icon} |")
+
+        active = sum(1 for b in self.branches if b.get("status") not in ("submitted", "abandoned"))
+        submitted = sum(1 for b in self.branches if b.get("status") == "submitted")
+        abandoned = sum(1 for b in self.branches if b.get("status") == "abandoned")
+        lines.append(
+            f"\n**Summary**: {active} active | {submitted} submitted | {abandoned} abandoned"
+        )
+        return "\n".join(lines)
+
+    def track_branch(self, bond_name: str = "", template_index: int = 0,
+                     classification: str = "", precursor_count: int = 0,
+                     status: str = "exploring") -> int:
+        """Register a new exploration branch and return its ID."""
+        branch_id = len(self.branches) + 1
+        self.branches.append({
+            "id": f"B{branch_id}",
+            "bond_name": bond_name,
+            "template_index": template_index,
+            "classification": classification,
+            "best_score": None,
+            "precursor_count": precursor_count,
+            "stock_count": 0,
+            "status": status,
+        })
+        return branch_id
+
+    def update_branch(self, branch_index: int, **kwargs) -> None:
+        """Update fields on a tracked branch."""
+        if 0 <= branch_index < len(self.branches):
+            self.branches[branch_index].update(kwargs)
