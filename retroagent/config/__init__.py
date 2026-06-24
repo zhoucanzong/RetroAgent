@@ -95,6 +95,15 @@ class RetroAgentConfig:
     # Ring-breaker templates (CSV)
     ringbreaker_templates_path: Path | None = None
 
+    # --- Inner Loop Engineering ---
+    agent_enable_reflection: bool = True
+    agent_enable_backtracking: bool = True
+    agent_backtrack_score_threshold: float = 0.3
+    agent_backtrack_patience: int = 2
+    agent_enable_repeated_action_guard: bool = True
+    agent_max_repeated_actions: int = 2
+    agent_enable_schema_validation: bool = True
+
     # --- Environment ---
     env_timeout: int = 120
 
@@ -157,6 +166,14 @@ def load_config() -> RetroAgentConfig:
         agent_max_search_depth=agent_section.get("max_search_depth", 20),
         agent_search_strategy=agent_section.get("search_strategy", "auto"),
         agent_max_consecutive_format_errors=agent_section.get("max_consecutive_format_errors", 3),
+        # Inner Loop Engineering
+        agent_enable_reflection=agent_section.get("enable_reflection", True),
+        agent_enable_backtracking=agent_section.get("enable_backtracking", True),
+        agent_backtrack_score_threshold=agent_section.get("backtrack_score_threshold", 0.3),
+        agent_backtrack_patience=agent_section.get("backtrack_patience", 2),
+        agent_enable_repeated_action_guard=agent_section.get("enable_repeated_action_guard", True),
+        agent_max_repeated_actions=agent_section.get("max_repeated_actions", 2),
+        agent_enable_schema_validation=agent_section.get("enable_schema_validation", True),
         # Environment
         env_timeout=env_section.get("timeout", 120),
     )

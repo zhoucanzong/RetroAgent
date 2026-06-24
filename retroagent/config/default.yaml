@@ -111,6 +111,15 @@ agent:
   max_search_depth: 20
   search_strategy: auto
 
+  # Inner Loop Engineering
+  enable_reflection: true
+  enable_backtracking: true
+  backtrack_score_threshold: 0.3
+  backtrack_patience: 2
+  enable_repeated_action_guard: true
+  max_repeated_actions: 2
+  enable_schema_validation: true
+
 # ---------------------------------------------------------------------------
 # Environment settings
 # ---------------------------------------------------------------------------

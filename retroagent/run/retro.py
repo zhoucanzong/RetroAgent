@@ -279,6 +279,13 @@ def run(
         search_strategy=cfg.agent_search_strategy,
         max_consecutive_format_errors=cfg.agent_max_consecutive_format_errors,
         output_path=output,
+        enable_reflection=cfg.agent_enable_reflection,
+        enable_backtracking=cfg.agent_enable_backtracking,
+        backtrack_score_threshold=cfg.agent_backtrack_score_threshold,
+        backtrack_patience=cfg.agent_backtrack_patience,
+        enable_repeated_action_guard=cfg.agent_enable_repeated_action_guard,
+        max_repeated_actions=cfg.agent_max_repeated_actions,
+        enable_schema_validation=cfg.agent_enable_schema_validation,
     )
 
     print(f"\n{'='*60}")

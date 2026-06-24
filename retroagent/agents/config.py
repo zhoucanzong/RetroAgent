@@ -1,8 +1,7 @@
 """PlannerConfig and base agent configuration for RetroAgent."""
 
 from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import Literal
+from pydantic import BaseModel
 
 
 class PlannerConfig(BaseModel):
@@ -35,3 +34,24 @@ class PlannerConfig(BaseModel):
     search_strategy: str = "auto"
     """Search strategy hint for the Planner. 'explore', 'exploit', or 'auto'."""
 
+    # --- Inner Loop Engineering settings ---
+    enable_reflection: bool = True
+    """After each tool execution, ask the LLM to reflect on the result."""
+
+    enable_backtracking: bool = True
+    """Detect low scores / dead-ends and force the LLM to backtrack."""
+
+    backtrack_score_threshold: float = 0.3
+    """If best route score stays below this for N rounds, trigger backtracking."""
+
+    backtrack_patience: int = 2
+    """Number of consecutive low-score rounds before backtracking."""
+
+    enable_repeated_action_guard: bool = True
+    """Detect repeated identical tool calls and terminate early."""
+
+    max_repeated_actions: int = 2
+    """Allow the same tool+parameters combination up to this many times."""
+
+    enable_schema_validation: bool = True
+    """Validate LLM tool parameters against declared JSON schemas before execution."""
