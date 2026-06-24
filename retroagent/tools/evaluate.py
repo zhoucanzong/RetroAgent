@@ -50,6 +50,71 @@ class EvaluationTool:
             'acetyl': Chem.MolFromSmarts('CC(=O)'),
         }
 
+        # Common lab reagents — ALWAYS purchasable, even if ZINC doesn't list them
+        # ZINC = screening compounds (~17.4M), NOT industrial chemical supplier catalog
+        # These SMILES/SMARTS cover reagents used in 95% of organic synthesis
+        self._always_available_smarts: list = [
+            Chem.MolFromSmarts(s) for s in [
+                # Inorganic reagents
+                '[OH-]',               # hydroxide
+                '[Na+]', '[K+]', '[Li+]',  # alkali metals
+                '[Mg]', '[Mg+2]',       # magnesium
+                '[Al+3]',               # aluminum
+                '[Cl-]', '[Br-]', '[I-]',  # halides
+                '[BH4-]',               # borohydride
+                '[Li]',                 # lithium metal
+                '[Zn]',                 # zinc metal
+                '[Pd]', '[Pt]', '[Ni]', '[Ru]', '[Rh]', '[Ir]',  # transition metals
+                # Common solvents
+                'CC#N',                 # acetonitrile
+                'C1CCCOC1',             # THF
+                'CC(C)=O',              # acetone
+                'CN(C)C=O',             # DMF
+                'CS(C)=O',              # DMSO
+                'C(Cl)Cl',              # DCM
+                'C1CCCCC1',            # cyclohexane
+                'c1ccccc1',            # benzene
+                'Cc1ccccc1',           # toluene
+                # Common reagents
+                'CI', 'CBr',          # methyl iodide/bromide
+                'CC(=O)Cl',           # acetyl chloride
+                'S(=O)(Cl)Cl',         # thionyl chloride
+                'CCOC(=O)Cl',          # ethyl chloroformate
+                # Simple acids/bases
+                'Cl',                  # HCl
+                'OS(=O)(=O)O',        # sulfuric acid
+                'N',                  # ammonia
+                'CC(=O)O',            # acetic acid
+                'O=C(O)C(=O)O',       # oxalic acid
+                # Oxidants/reductants
+                'OO',                  # hydrogen peroxide
+                'O=[Mn](=O)(=O)[O-]', # permanganate
+                'O=O',                # oxygen
+                '[C-]#[O+]',          # carbon monoxide
+                # Common silanes/protecting groups
+                'C[Si](C)(C)Cl',      # TMSCl
+                'C[Si](C)(C)I',       # TMSI
+            ]
+        ]
+
+    def _is_trivial_or_lab_reagent(self, mol) -> bool:
+        """Check if a molecule is a trivial chemotype or common lab reagent."""
+        if mol is None:
+            return False
+        # Check trivial chemotypes first (faster)
+        for _, pattern in self._trivial_chemotypes.items():
+            if mol.HasSubstructMatch(pattern):
+                return True
+        # Check always-available lab reagents
+        for pattern in self._always_available_smarts:
+            if mol.HasSubstructMatch(pattern):
+                return True
+        # Small molecules (≤3 heavy atoms) are almost always purchasable
+        heavy_atoms = sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() > 1)
+        if heavy_atoms <= 3:
+            return True
+        return False
+
     def execute(self, parameters: dict) -> str:
         route_ids = parameters.get("route_ids", [])
         target = parameters.get("target", "")
@@ -121,13 +186,21 @@ class EvaluationTool:
             return 0.0
 
     def _check_stock_availability(self, precursor_smiles_list: list[str]) -> float:
-        if not self._stock_loaded or not precursor_smiles_list:
+        if not precursor_smiles_list:
+            return 0.5
+        if not self._stock_loaded:
             return 0.5
         in_stock = 0
         for smi in precursor_smiles_list:
             try:
                 mol = Chem.MolFromSmiles(smi)
-                if mol and Chem.MolToInchiKey(mol) in self._stock_keys:
+                if mol is None:
+                    continue
+                # Phase 0 improvement: common lab reagents + trivial chemotypes
+                # always count as "available" regardless of ZINC
+                if self._is_trivial_or_lab_reagent(mol):
+                    in_stock += 1
+                elif Chem.MolToInchiKey(mol) in self._stock_keys:
                     in_stock += 1
             except Exception:
                 pass

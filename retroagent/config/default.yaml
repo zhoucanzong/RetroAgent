@@ -84,6 +84,7 @@ agent:
     6. A route is complete when ALL precursors are **either in stock OR can be made in ONE trivial step from stock reagents**
     7. If a precursor is not in stock but is a simple molecule (e.g. common ester, anhydride, acid chloride), do NOT discard the route -- instead propose a 1-step synthesis from in-stock building blocks
     8. You have ample steps available (step_limit=100). Feel free to explore alternative routes deeply and recursively expand precursors that are not immediately available
+    9. ⚠️ CRITICAL — STOCK DATABASE LIMITATIONS: The ZINC database contains ~17.4M screening compounds, NOT industrial bulk reagents. Common laboratory reagents (NaBH₄, Pd catalysts, LDA, MeI, NaOH, HCl, CO gas, H₂, MeCN, solvents) are nearly always purchasable from chemical suppliers even if ZINC reports "not in stock". The stock check is a HELPFUL HINT, not a final verdict. Do NOT discard a chemically sound route just because a common reagent fails the ZINC check. Use your chemical knowledge to decide what is truly unavailable vs. what ZINC simply doesn't catalog.
     {% else %}
     ## Ligand/Catalyst Design Strategy
     1. **FIRST** use `design_ligand` to generate candidate molecules matching the constraints
