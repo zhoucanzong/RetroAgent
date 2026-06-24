@@ -51,7 +51,10 @@ class EvaluationTool:
         }
 
         # Common lab reagents — ALWAYS purchasable, even if ZINC doesn't list them
-        # ZINC = screening compounds (~17.4M), NOT industrial chemical supplier catalog
+        # ZINC = screening compounds (~17.4M), NOT industrial chemical supplier catalog.
+        # ZINC 库存是 Irwin Shoichet (UCSF) 为虚拟筛选整理的类药分子数据库，
+        # 不是通用化学试剂目录。Sigma-Aldrich 有 ~30 万种，eMolecules 有 ~1000 万种，
+        # 但 ZINC 的选品方向决定了它不收录无机试剂、金属催化剂、简单溶剂。
         # These SMILES/SMARTS cover reagents used in 95% of organic synthesis
         self._always_available_smarts: list = [
             Chem.MolFromSmarts(s) for s in [
