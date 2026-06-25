@@ -86,3 +86,9 @@ class PlannerConfig(BaseModel):
     # --- Design Auditor (Phase 0F) ---
     enable_design_auditor: bool = True
     """In design mode, run an adversarial chemical correctness review of catalyst/ligand designs."""
+
+    # --- Context compaction ---
+    compaction_threshold: int = 60000
+    """Compress old tool outputs to summaries when total message chars exceed this. 0 disables."""
+    compaction_working_window: int = 8
+    """Number of most-recent messages always preserved verbatim during compaction."""

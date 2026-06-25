@@ -21,6 +21,7 @@ from retroagent.tools.chirality import ChiralityTool
 from retroagent.tools.ligand_category import LigandCategoryTool
 from retroagent.tools.conditional_ligand import ConditionalLigandTool
 from retroagent.tools.think import ThinkTool
+from retroagent.tools.catalyst import CatalystTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -230,6 +231,8 @@ def _build_environment() -> RetroEnvironment:
 
     # Phase 1: Think Tool — always registered (pure text, no model files needed)
     env.register("think", ThinkTool())
+    # Structured catalyst calculator — computes facts, never judges
+    env.register("design_catalyst", CatalystTool())
 
     return env
 

@@ -103,6 +103,10 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 
 ### 模型下载
 
+- https://figshare.com/articles/dataset/AiZynthFinder_a_fast_robust_and_flexible_open-source_software_for_retrosynthetic_planning/12334577
+- https://zenodo.org/records/7341155
+- https://zenodo.org/records/7797465
+
 模型文件需手动下载并平铺放在 `models/` 目录下：
 
 - **Zenodo 7797465**：`uspto_model.onnx`, `uspto_filter_model.onnx`, `uspto_ringbreaker_model.onnx`
@@ -245,20 +249,20 @@ LLM 选择最佳候选并提交
 
 ## 📊 当前状态
 
-| 阶段      | 状态 | 内容                                                                         |
-| --------- | ---- | ---------------------------------------------------------------------------- |
-| Phase 1.1 | ✅   | 项目骨架 + RetroTool 协议                                                    |
-| Phase 1.2 | ✅   | SharedBlackboard 状态容器                                                    |
-| Phase 1.3 | ✅   | RetroEnvironment 工具分发器 + BashTool                                       |
-| Phase 1.4 | ✅   | 5 个核心 Tool (disconnect/propose/evaluate/stock/literature/condition)       |
-| Phase 1.5 | ✅   | RetroPlanner 控制循环 + PlannerConfig + System Template                      |
-| Phase 1.6 | ✅   | 集成测试 — aspirin 合成                                                     |
-| Phase 1.7 | ✅   | YAML 配置系统 + 模型路径平铺 + OpenAI client                                 |
-| Phase 1.8 | ✅   | 手性配体设计扩展：ChiralityTool / LigandCategoryTool / ConditionalLigandTool |
-| Phase 1.9 | ✅   | 环断裂策略网络 + 模板库接入                                                  |
-| Phase 2   | ✅   | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通）                              |
+| 阶段      | 状态 | 内容                                                                                                                          |
+| --------- | ---- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1.1 | ✅   | 项目骨架 + RetroTool 协议                                                                                                     |
+| Phase 1.2 | ✅   | SharedBlackboard 状态容器                                                                                                     |
+| Phase 1.3 | ✅   | RetroEnvironment 工具分发器 + BashTool                                                                                        |
+| Phase 1.4 | ✅   | 5 个核心 Tool (disconnect/propose/evaluate/stock/literature/condition)                                                        |
+| Phase 1.5 | ✅   | RetroPlanner 控制循环 + PlannerConfig + System Template                                                                       |
+| Phase 1.6 | ✅   | 集成测试 — aspirin 合成                                                                                                      |
+| Phase 1.7 | ✅   | YAML 配置系统 + 模型路径平铺 + OpenAI client                                                                                  |
+| Phase 1.8 | ✅   | 手性配体设计扩展：ChiralityTool / LigandCategoryTool / ConditionalLigandTool                                                  |
+| Phase 1.9 | ✅   | 环断裂策略网络 + 模板库接入                                                                                                   |
+| Phase 2   | ✅   | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通）                                                                               |
 | Phase 3   | ✅   | Loop Engineering: Think Tool + Dead-Loop Monitor + Enhanced Observation + Adaptive Scaling + Branch Tracking + Design Auditor |
-| Phase 4   | ⏳   | Benchmark 评估 + Cache Priming                                                  |
+| Phase 4   | ⏳   | Benchmark 评估 + Cache Priming                                                                                                |
 
 ---
 

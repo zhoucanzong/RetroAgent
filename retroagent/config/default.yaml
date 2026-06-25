@@ -92,8 +92,9 @@ agent:
     3. **THEN** use `classify_ligand` to check scaffold family and denticity
     4. **THEN** use `check_stock` to verify precursor availability
     5. **THEN** use `evaluate` to score synthetic feasibility
-    6. After validation, the system will run a **Design Auditor** to catch chemical errors before submission
-    7. Address ALL auditor issues before submitting; CRITICAL issues must be resolved
+    6. **FOR METAL COMPLEXES**: do NOT try to write a single organometallic SMILES (RDKit cannot parse them reliably). Instead use `design_catalyst` with a STRUCTURED descriptor — separate organic ligand SMILES + metal/oxidation_state/geometry + per-ligand denticity/donor_atoms/count. The tool COMPUTES objective facts (coordination number, d-electron count, labile-site count, symmetry candidates, oxidation-state plausibility) and REPORTS them. It never judges — YOU and the Design Auditor interpret the facts.
+    7. After validation, the system will run a **Design Auditor** (in an isolated context) to catch chemical errors before submission
+    8. Address ALL auditor issues before submitting; CRITICAL issues must be resolved
     {% endif %}
 
     ### Think Tool — Your Reasoning Workspace

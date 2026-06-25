@@ -132,6 +132,7 @@ class RetroPlanner:
 
         while True:
             try:
+                self._compact_messages()  # Context engineering: keep long runs viable
                 self.step()
                 self.n_consecutive_format_errors = 0
             except _InterruptAgentFlow as e:
@@ -270,10 +271,20 @@ class RetroPlanner:
         )
 
         try:
-            review_message = self.model.query(
-                self.messages
-                + [self._format_message("user", reviewer_prompt)]
-            )
+            # ISOLATED sub-agent context: query the reviewer on a fresh, FACT-ONLY
+            # snapshot — NOT self.messages. This prevents anchoring on the main
+            # agent's own reasoning (Claude-style fresh-context review). The model
+            # sees only the objective route facts + the audit checklist.
+            snapshot = self._snapshot_for_review()
+            isolated_context = [
+                {"role": "system", "content": (
+                    "You are an independent, adversarial peer reviewer for retrosynthetic "
+                    "analysis. You have NO knowledge of how these routes were derived — "
+                    "judge ONLY the facts presented. Do NOT call any tools. Output ONLY "
+                    "your review report (ISSUE lines + VERDICT).")},
+                {"role": "user", "content": snapshot + "\n\n" + reviewer_prompt},
+            ]
+            review_message = self.model.query(isolated_context)
             review_content = review_message.get("content", "")
             self.cost += review_message.get("extra", {}).get("cost", 0.0)
             self.n_calls += 1
@@ -291,6 +302,43 @@ class RetroPlanner:
         except Exception as e:
             self.logger.warning(f"Review step failed: {e}")
             return None
+
+    def _snapshot_for_review(self) -> str:
+        """Build a FACT-ONLY snapshot of current retrosynthesis state for isolated review.
+
+        Contains objective data (target, scores, precursors, disconnections, stock hits)
+        but NOT the agent's reasoning trace. This is what an independent reviewer should
+        see — facts, not the author's justifications.
+        """
+        bb = self.blackboard
+        parts = [f"TARGET: {bb.target_smiles}", f"MODE: retrosynthesis", ""]
+        parts.append(f"Iteration: {bb.iteration_count}")
+
+        if bb.scores:
+            parts.append("\nSCORED ROUTES:")
+            for rid, s in list(bb.scores.items())[:5]:
+                total = s["total"] if isinstance(s, dict) else s
+                feas = s.get("feasibility", "?") if isinstance(s, dict) else "?"
+                stock = s.get("stock_availability", "?") if isinstance(s, dict) else "?"
+                parts.append(f"  Route {rid}: total={total:.3f} feasibility={feas} stock={stock}")
+
+        if bb.proposal_results:
+            parts.append("\nPROPOSED REACTIONS:")
+            for rxn in bb.proposal_results[:5]:
+                precursors = rxn.get("precursors", [])
+                parts.append(f"  Template#{rxn.get('template_index','?')} [{rxn.get('classification','?')}]: "
+                             f"{' + '.join(precursors) if precursors else 'none'}")
+
+        if bb.disconnection_results:
+            parts.append("\nDISCONNECTIONS:")
+            for b in bb.disconnection_results[:3]:
+                parts.append(f"  rank={b.get('rank')} template#{b.get('template_index')} "
+                             f"matching={b.get('matching')} class={b.get('classification')}")
+
+        if bb.stock_hits:
+            parts.append(f"\nSTOCK HITS ({len(bb.stock_hits)}): {', '.join(list(bb.stock_hits)[:6])}")
+
+        return "\n".join(parts)
 
     def _summarize_routes_for_review(self) -> str:
         """Extract a concise summary of current routes from the blackboard."""
@@ -794,25 +842,11 @@ class RetroPlanner:
         self._last_design_audit_round = current_round
         self._design_audit_count += 1
 
-        # Build a summary of what's been designed so far
-        summary_parts = []
-        candidates = self.blackboard.design_candidates
-        if candidates:
-            summary_parts.append(f"Generated {len(candidates)} candidate(s).")
-            for c in candidates[-3:]:  # last 3
-                summary_parts.append(f"  - {json.dumps(c, ensure_ascii=False)[:300]}")
-        for ev in evaluated[-3:]:
-            summary_parts.append(f"Evaluation: {json.dumps(ev, ensure_ascii=False)[:300]}")
-
-        design_summary = "\n".join(summary_parts) if summary_parts else "(no design data yet)"
-
         # Build the auditor prompt
         auditor_prompt = (
-            "### Role Switch: Catalyst Design Auditor ###\n\n"
-            "You are now acting as an **adversarial chemistry reviewer** for the catalyst "
-            "design proposal above. Your ONLY task is to identify chemical flaws. "
-            "Be skeptical — challenge every claim.\n\n"
-            f"#### Current Design Data:\n{design_summary}\n\n"
+            "### Catalyst Design Audit ###\n\n"
+            "You are an adversarial chemistry reviewer. Your ONLY task is to identify "
+            "chemical flaws in the design data above. Be skeptical — challenge every claim.\n\n"
             "#### Design Audit Checklist (answer each explicitly):\n\n"
             "1. **Symmetry** — What symmetry does the user request? (C2 / C3 / etc.) "
             "Does each candidate ACTUALLY have that symmetry? Count the ligands "
@@ -850,19 +884,20 @@ class RetroPlanner:
         )
 
         try:
-            # Use isolated review with tools disabled. We send the auditor prompt
-            # via model.query() which always passes tools. So wrap with a no-tools query.
-            # Hack: temporarily set env to empty tools for this call, then restore.
-            # Better approach: inject a strong instruction to NOT call tools.
-            audit_prompt_wrapped = (
-                auditor_prompt
-                + "\n\n**CRITICAL: Do NOT call any tools in your response. "
-                "This is a text-only audit. Output ONLY the audit report with "
-                "ISSUE lines and AUDIT_VERDICT. No JSON, no tool calls.**"
-            )
-            audit_message = self.model.query(
-                self.messages + [self._format_message("user", audit_prompt_wrapped)]
-            )
+            # ISOLATED sub-agent context: query the auditor on a fresh, FACT-ONLY
+            # snapshot — NOT self.messages. The auditor sees only objective design
+            # facts (candidates, computed coordination/symmetry/chirality) and the
+            # checklist. No exposure to the main agent's reasoning → no anchoring.
+            snapshot = self._snapshot_for_audit()
+            isolated_context = [
+                {"role": "system", "content": (
+                    "You are an independent, adversarial catalyst design auditor. "
+                    "You have NO knowledge of how this design was produced — judge "
+                    "ONLY the facts presented. Do NOT call any tools. Output ONLY "
+                    "your audit report (ISSUE lines, FIX_SUGGESTIONS, AUDIT_VERDICT).")},
+                {"role": "user", "content": snapshot + "\n\n" + auditor_prompt},
+            ]
+            audit_message = self.model.query(isolated_context)
             audit_content = audit_message.get("content", "")
             self.cost += audit_message.get("extra", {}).get("cost", 0.0)
             self.n_calls += 1
@@ -880,6 +915,33 @@ class RetroPlanner:
         except Exception as e:
             self.logger.warning(f"Design audit failed: {e}")
             return None
+
+    def _snapshot_for_audit(self) -> str:
+        """Build a FACT-ONLY snapshot of current design state for isolated audit.
+
+        Contains objective data (task constraints, candidates with SMILES, computed
+        chirality/classification, design_catalyst computed facts) but NOT the agent's
+        reasoning trace. An independent auditor sees facts, not the author's pitch.
+        """
+        bb = self.blackboard
+        parts = [f"DESIGN TASK: {bb.target_smiles}", f"MODE: design", ""]
+        parts.append(f"Iteration: {bb.iteration_count}")
+
+        if bb.design_candidates:
+            parts.append("\nCANDIDATES GENERATED:")
+            for i, c in enumerate(bb.design_candidates[-4:], 1):
+                smi = c.get("smiles") or c.get("canonical_smiles", "?")
+                parts.append(f"  {i}. {smi}")
+
+        if bb.design_evaluations:
+            parts.append("\nEVALUATIONS (tool outputs):")
+            for ev in bb.design_evaluations[-5:]:
+                res = ev.get("result", {})
+                tool = ev.get("tool", "?")
+                # Keep evaluation FACTS, drop nothing else
+                parts.append(f"  [{tool}] {json.dumps(res, ensure_ascii=False)[:400]}")
+
+        return "\n".join(parts)
 
     def _reflection_prompt(self, action: dict, output: dict) -> str:
         """Generate a short reflection prompt after tool execution."""
@@ -1104,6 +1166,75 @@ class RetroPlanner:
                 path.write_text(json.dumps(self.messages, indent=2, ensure_ascii=False))
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Context compaction (Claude Code wU2-inspired)
+    # Keep long runs viable by compressing OLD tool outputs into summaries.
+    # Preserved: system/instance prompts, recent 8 messages, <thinking> blocks,
+    # audit verdicts, COMPLETE_TASK submission signals, latest branch table.
+    # ------------------------------------------------------------------
+
+    def _compact_messages(self) -> None:
+        """Compress old tool outputs to one-line summaries when context grows large.
+
+        Idempotent: a message already compressed (no <output> tag) is left alone.
+        Never touches the submission signal or recent working window.
+        """
+        threshold = getattr(self.config, "compaction_threshold", 60000)
+        working_window = getattr(self.config, "compaction_working_window", 8)
+        if threshold <= 0 or len(self.messages) < working_window * 2 + 4:
+            return
+
+        total = sum(len(m.get("content", "") or "") for m in self.messages)
+        if total < threshold:
+            return
+
+        # Split into compactable head + protected tail (recent working window).
+        tail = self.messages[-working_window:]
+        head = self.messages[:-working_window]
+        if not head:
+            return
+
+        compacted = []
+        n_compressed = 0
+        saved_chars = 0
+        for msg in head:
+            content = msg.get("content", "") or ""
+            # Protect: submission signal, thinking blocks, audit verdicts.
+            # Only compress old user-role tool outputs.
+            if (
+                "<output>" in content
+                and "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in content
+                and "<thinking>" not in content
+                and "<role:design_auditor>" not in content
+                and "<role:reviewer>" not in content
+            ):
+                tool = self._extract_tag(content, "tool") or "tool"
+                out_json = self._extract_tag(content, "output")
+                summary = self._summarize_result(tool, out_json) if out_json else "(output elided)"
+                new_content = f"[compacted] {tool}: {summary}"
+                saved_chars += len(content) - len(new_content)
+                compacted.append({**msg, "content": new_content})
+                n_compressed += 1
+            else:
+                compacted.append(msg)
+
+        self.messages = compacted + tail
+        if n_compressed:
+            new_total = sum(len(m.get("content", "") or "") for m in self.messages)
+            self.logger.info(
+                f"Context compacted: {n_compressed} old outputs summarized, "
+                f"{total} → {new_total} chars"
+            )
+
+    @staticmethod
+    def _extract_tag(content: str, tag: str) -> str | None:
+        """Extract the inner text of the first <tag>...</tag> in content."""
+        import re
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", content, re.DOTALL)
+        return m.group(1).strip() if m else None
+
+    # ------------------------------------------------------------------
 
 
 # --- Exception classes (mirroring mini-swe-agent's exception hierarchy) ---
