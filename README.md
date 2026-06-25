@@ -8,9 +8,9 @@
 
 </div>
 
-RetroAgent 是一个基于 **LLM 中枢决策 + 专用化学工具** 的逆合成路线规划与手性配体设计系统。
+RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——**LLM 是唯一的决策中枢，专用化学工具全部退化为纯函数（只计算和获取事实，从不替模型做判断）**，并由独立的隔离审查 sub-agent 纠错、免费层文献检索接地。覆盖逆合成路线规划、手性配体与金属催化剂设计、以及文献查证。
 
-> 智能只存在于 **Planner（LLM）**。专用化学模型（ONNX、模板库、库存、RDKit）全部退化为 **Tool** —— 纯函数，不做决策。
+> 智能只存在于 **Planner（LLM）**。专用化学模型（ONNX、模板库、库存、RDKit）与外部检索（文献、URL）全部退化为 **Tool** —— 纯函数，不做决策。判断（路线好坏、催化剂对错）由 LLM 在隔离的审查上下文里完成。
 
 ---
 
@@ -133,9 +133,10 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 
 ```bash
 cd RetroAgent
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+pip install -r requirements.txt
 ```
+
+> 可选：在虚拟环境中安装以隔离依赖（`python3 -m venv .venv && source .venv/bin/activate`），但下面的示例均假设依赖已装好、直接用 `python3` 运行。
 
 > aizynthfinder 的 Python 版本要求 (`<3.13`) 与当前 Python 3.14 不兼容，因此项目通过文件系统直接导入其 `chem` 模块：
 
@@ -176,19 +177,19 @@ export LLM_BASE_URL="https://api.openai.com/v1"
 ### 1. 工具测试（无需 API key）
 
 ```bash
-PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro test-tools "CC(=O)Oc1ccccc1C(=O)O"
+PYTHONPATH=. python3 -m retroagent.run.retro test-tools "CC(=O)Oc1ccccc1C(=O)O"
 ```
 
 ### 2. 逆合成规划
 
 ```bash
-PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run "CC(=O)Oc1ccccc1C(=O)O"
+PYTHONPATH=. python3 -m retroagent.run.retro run "CC(=O)Oc1ccccc1C(=O)O"
 ```
 
 ### 3. 手性配体设计
 
 ```bash
-PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run \
+PYTHONPATH=. python3 -m retroagent.run.retro run \
   "Point chirality ligand with P and O donor atoms" \
   --mode design
 ```
@@ -196,7 +197,7 @@ PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run \
 ### 4. 保存轨迹
 
 ```bash
-PYTHONPATH=. .venv/bin/python3 -m retroagent.run.retro run "..." -o /tmp/traj.json
+PYTHONPATH=. python3 -m retroagent.run.retro run "..." -o /tmp/traj.json
 ```
 
 ---
