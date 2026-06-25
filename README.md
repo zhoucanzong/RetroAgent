@@ -16,13 +16,13 @@ RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——*
 
 ## ✨ 核心能力
 
-| 模式                      | 输入            | 核心工具链                                                        | 输出                      |
-| ------------------------- | --------------- | ----------------------------------------------------------------- | ------------------------- |
-| **Retrosynthesis**  | 目标分子 SMILES | `disconnect` → `propose` → `evaluate` → `check_stock`  | 完整合成路线              |
-| **Ligand Design**   | 自然语言约束    | `design_ligand` → `analyze_chirality` → `classify_ligand` | 候选手性配体              |
-| **Catalyst Assembly** | 结构化约束 | `design_catalyst` (配位数/d电子/labile位点计算) → Auditor 审查 | 金属催化剂描述符 + 事实报告 |
-| **Literature Search** | 查询词 | `web_search` (Crossref/S2/PubChem) → `fetch_url` | 文献命中 + 摘要 |
-| **Chiral Analysis** | 任意 SMILES     | `analyze_chirality` + `classify_ligand`                       | 手性类型 / R/S / 配位原子 |
+| 模式                        | 输入            | 核心工具链                                                        | 输出                        |
+| --------------------------- | --------------- | ----------------------------------------------------------------- | --------------------------- |
+| **Retrosynthesis**    | 目标分子 SMILES | `disconnect` → `propose` → `evaluate` → `check_stock`  | 完整合成路线                |
+| **Ligand Design**     | 自然语言约束    | `design_ligand` → `analyze_chirality` → `classify_ligand` | 候选手性配体                |
+| **Catalyst Assembly** | 结构化约束      | `design_catalyst` (配位数/d电子/labile位点计算) → Auditor 审查 | 金属催化剂描述符 + 事实报告 |
+| **Literature Search** | 查询词          | `web_search` (Crossref/S2/PubChem) → `fetch_url`             | 文献命中 + 摘要             |
+| **Chiral Analysis**   | 任意 SMILES     | `analyze_chirality` + `classify_ligand`                       | 手性类型 / R/S / 配位原子   |
 
 ---
 
@@ -31,7 +31,7 @@ RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——*
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Planner (LLM)                               │
-│              唯一决策中枢：选择策略、交叉验证、终止判断                 │
+│              唯一决策中枢：选择策略、交叉验证、终止判断                    │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │
         ┌───────────────────────┼───────────────────────┐
@@ -276,9 +276,9 @@ LLM 根据审查反馈修正并提交
 | Phase 1.9 | ✅   | 环断裂策略网络 + 模板库接入                                                                                                   |
 | Phase 2   | ✅   | LLM 驱动端到端规划（逆合成 + 配体设计均已跑通）                                                                               |
 | Phase 3   | ✅   | Loop Engineering: Think Tool + Dead-Loop Monitor + Enhanced Observation + Adaptive Scaling + Branch Tracking + Design Auditor |
-| Phase 4   | ✅   | Claude 哲学重构: 隔离 Auditor sub-agent + design_catalyst 计算器 + classify_ligand SMARTS 修复 + 上下文压缩 |
-| Phase 5   | ✅   | 模型侧优化: design_ligand 模板化 + 全免费层 web_search/fetch_url + 文献接地的审查 |
-| Phase 6   | ⏳   | Benchmark 评估 + 更强 LLM (Auditor 用 Opus/GPT-4 级) |
+| Phase 4   | ✅   | Claude 哲学重构: 隔离 Auditor sub-agent + design_catalyst 计算器 + classify_ligand SMARTS 修复 + 上下文压缩                   |
+| Phase 5   | ✅   | 模型侧优化: design_ligand 模板化 + 全免费层 web_search/fetch_url + 文献接地的审查                                             |
+| Phase 6   | ⏳   | Benchmark 评估 + 更强 LLM (Auditor 用 Opus/GPT-4 级)                                                                          |
 
 ---
 
