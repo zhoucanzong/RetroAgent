@@ -22,6 +22,8 @@ from retroagent.tools.ligand_category import LigandCategoryTool
 from retroagent.tools.conditional_ligand import ConditionalLigandTool
 from retroagent.tools.think import ThinkTool
 from retroagent.tools.catalyst import CatalystTool
+from retroagent.tools.web_search import WebSearchTool
+from retroagent.tools.fetch_url import FetchUrlTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -220,19 +222,16 @@ def _build_environment() -> RetroEnvironment:
     # New: chiral ligand design tools (always available, lightweight)
     env.register("analyze_chirality", ChiralityTool())
     env.register("classify_ligand", LigandCategoryTool())
-    # Conditional ligand design tool with optional CIC-DB few-shot examples
-    design_tool = ConditionalLigandTool(
-        examples_path=str(cfg.cic_db_conditional_examples_path)
-        if cfg.cic_db_conditional_examples_path and cfg.cic_db_conditional_examples_path.exists()
-        else None,
-        n_examples=3,
-    )
-    env.register("design_ligand", design_tool)
+    # Template-driven ligand generator (curated scaffold library, deterministic)
+    env.register("design_ligand", ConditionalLigandTool())
 
     # Phase 1: Think Tool — always registered (pure text, no model files needed)
     env.register("think", ThinkTool())
     # Structured catalyst calculator — computes facts, never judges
     env.register("design_catalyst", CatalystTool())
+    # Free-tier web tools (Crossref/S2/PubChem + URL fetch) — always available
+    env.register("web_search", WebSearchTool())
+    env.register("fetch_url", FetchUrlTool())
 
     return env
 

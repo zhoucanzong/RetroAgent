@@ -338,7 +338,30 @@ class RetroPlanner:
         if bb.stock_hits:
             parts.append(f"\nSTOCK HITS ({len(bb.stock_hits)}): {', '.join(list(bb.stock_hits)[:6])}")
 
+        # Ground the reviewer in real literature precedent (Feng-style proactive fetch)
+        lit = self._gather_literature_for_review()
+        if lit:
+            parts.append("\n" + lit)
+
         return "\n".join(parts)
+
+    def _gather_literature_for_review(self) -> str:
+        """Pull literature for the retrosynthesis target — grounds the route reviewer."""
+        try:
+            target = self.blackboard.target_smiles or ""
+            if not target:
+                return ""
+            hits = self._run_web_search(f"synthesis of {target}", limit=4)
+            if not hits:
+                return ""
+            lines = ["RELATED LITERATURE (via web_search):"]
+            for h in hits:
+                title = (h.get("title") or "?")[:90]
+                yr = h.get("year") or "?"
+                lines.append(f"  - [{h.get('source','?')} {yr}] {title}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     def _summarize_routes_for_review(self) -> str:
         """Extract a concise summary of current routes from the blackboard."""
@@ -864,10 +887,12 @@ class RetroPlanner:
             "the target reaction? For C-H activation: MeCN, H₂O, or weakly-coordinating "
             "anions (OTf⁻, BF₄⁻, PF₆⁻) are GOOD. acac⁻, Cp*, strongly-bound Cl⁻ "
             "are BAD — they block the metal center. Check each candidate.\n\n"
-            "5. **Literature Precedent** — Is there a known catalyst in the literature "
-            "with similar architecture? If the candidate has identical architecture to "
-            "a known OLED luminophore but the user asked for a C-H activation catalyst, "
-            "flag this as a MISMATCHED APPLICATION.\n\n"
+            "5. **Literature Precedent** — Compare each candidate against the RELATED "
+            "LITERATURE provided in the snapshot (fetched via web_search). Is the "
+            "design architecture supported by these precedents? If a candidate "
+            "matches a known OLED luminophore but the user asked for a C-H activation "
+            "catalyst, flag it as MISMATCHED APPLICATION. If the literature shows a "
+            "better-established architecture the designer missed, note it.\n\n"
             "6. **Valence/Electron Count** — Rapid check: does the candidate violate "
             "the 18-electron rule or common oxidation states for this metal?\n\n"
             "#### Output format:\n"
@@ -920,8 +945,9 @@ class RetroPlanner:
         """Build a FACT-ONLY snapshot of current design state for isolated audit.
 
         Contains objective data (task constraints, candidates with SMILES, computed
-        chirality/classification, design_catalyst computed facts) but NOT the agent's
-        reasoning trace. An independent auditor sees facts, not the author's pitch.
+        chirality/classification, design_catalyst computed facts, related literature)
+        but NOT the agent's reasoning trace. An independent auditor sees facts, not
+        the author's pitch.
         """
         bb = self.blackboard
         parts = [f"DESIGN TASK: {bb.target_smiles}", f"MODE: design", ""]
@@ -941,7 +967,47 @@ class RetroPlanner:
                 # Keep evaluation FACTS, drop nothing else
                 parts.append(f"  [{tool}] {json.dumps(res, ensure_ascii=False)[:400]}")
 
+        # Proactively gather related literature so the auditor can check precedent.
+        parts.append("\n" + self._gather_literature_for_audit())
+
         return "\n".join(parts)
+
+    def _gather_literature_for_audit(self) -> str:
+        """Pull real literature hits for the design task (grounds the auditor in precedent).
+
+        Claude-aligned: instead of letting the isolated auditor call tools itself
+        (which would turn a single review call into a complex mini-loop), we fetch
+        literature up front and include it as facts in the snapshot. The auditor
+        reasons over BOTH the design and the precedents in one isolated call.
+        """
+        try:
+            task = self.blackboard.target_smiles or ""
+            if not task:
+                return ""
+            hits = self._run_web_search(task, limit=4)
+            if not hits:
+                return "RELATED LITERATURE: (none found)"
+            lines = ["RELATED LITERATURE (via web_search — verify claims against these):"]
+            for h in hits:
+                title = (h.get("title") or "?")[:90]
+                yr = h.get("year") or "?"
+                src = h.get("source", "?")
+                lines.append(f"  - [{src} {yr}] {title}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    def _run_web_search(self, query: str, limit: int = 4) -> list[dict]:
+        """Execute the web_search tool via the environment, if available."""
+        try:
+            result = self.env.execute({"tool": "web_search",
+                                       "parameters": {"query": query, "limit": limit}})
+            if result.get("returncode") == 0:
+                data = json.loads(result["output"])
+                return data.get("results", [])
+        except Exception:
+            pass
+        return []
 
     def _reflection_prompt(self, action: dict, output: dict) -> str:
         """Generate a short reflection prompt after tool execution."""
