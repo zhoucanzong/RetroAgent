@@ -2,7 +2,8 @@
 
 <div align="center">
 
-🧪 **LLM-driven retrosynthesis and chiral ligand design**
+🧪 **化学逆合成路线规划与手性配体设计智能体**
+<br>A chemistry agent for retrosynthetic route planning and chiral ligand design
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
