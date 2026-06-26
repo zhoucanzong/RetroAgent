@@ -24,6 +24,11 @@ from retroagent.tools.think import ThinkTool
 from retroagent.tools.catalyst import CatalystTool
 from retroagent.tools.web_search import WebSearchTool
 from retroagent.tools.fetch_url import FetchUrlTool
+from retroagent.tools.patent import PatentTool
+from retroagent.tools.functional_groups import FunctionalGroupsTool
+from retroagent.tools.identifiers import IdentifierTool
+from retroagent.tools.properties import PropertiesTool
+from retroagent.tools.reaction_mapper import ReactionMapperTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -232,6 +237,12 @@ def _build_environment() -> RetroEnvironment:
     # Free-tier web tools (Crossref/S2/PubChem + URL fetch) — always available
     env.register("web_search", WebSearchTool())
     env.register("fetch_url", FetchUrlTool())
+    # ChemMCP-inspired additions (always available, local/free)
+    env.register("check_patent", PatentTool())              # molbloom: purchasability
+    env.register("functional_groups", FunctionalGroupsTool())  # 50+ SMARTS FG scan
+    env.register("convert_identifier", IdentifierTool())    # name/IUPAC/CAS <-> SMILES (PubChem)
+    env.register("molecule_properties", PropertiesTool())   # RDKit physicochemical descriptors
+    env.register("map_reaction", ReactionMapperTool())      # rxnmapper atom-to-atom mapping
 
     return env
 

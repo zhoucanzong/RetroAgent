@@ -48,6 +48,12 @@ agent:
     ### {{ tool.name }}
     {{ tool.description }}
     **Parameters**: {{ tool.parameters | tojson }}
+    {% if tool.examples %}
+    **Examples**:
+    {% for ex in tool.examples %}
+    - Input: `{{ ex.input | tojson }}` → Output: `{{ ex.output | tojson }}`
+    {% endfor %}
+    {% endif %}
     {% endfor %}
 
     ## Current Blackboard State

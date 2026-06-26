@@ -230,6 +230,24 @@ class CatalystTool:
             "required": ["metal", "oxidation_state", "geometry", "ligands"],
         }
 
+    # Concrete input → output examples (rendered into the system prompt so the
+    # LLM calls the structured-input tool correctly on the first try).
+    examples = [
+        {
+            "input": {
+                "metal": "Ir", "oxidation_state": 3, "geometry": "octahedral",
+                "ligands": [
+                    {"smiles": "c1ccc(-c2nc3ccccc3o2)cc1", "denticity": 2, "donor_atoms": ["C", "N"], "count": 2},
+                    {"smiles": "CC#N", "denticity": 1, "donor_atoms": ["N"], "count": 2}
+                ],
+                "counterion": "PF6", "chirality_source": "metal Δ/Λ",
+                "target_reaction": "enantioselective C-H activation"
+            },
+            "output": {"total_coordination_number": 6, "d_electrons": 6, "labile_sites": 2,
+                       "symmetry_candidates": ["C2"], "oxidation_state_plausible": True},
+        }
+    ]
+
     @staticmethod
     def _is_labile(mol) -> bool:
         """Hint: does this ligand match a known labile motif? (Reported, not judged.)"""

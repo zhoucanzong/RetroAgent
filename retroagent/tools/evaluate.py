@@ -167,6 +167,12 @@ class EvaluationTool:
             "required": ["reactions"]
         }
 
+    examples = [
+        {"input": {"reactions": [{"id": "r1", "product_smiles": "CC(=O)Oc1ccccc1C(=O)O",
+                                  "precursor_smiles_list": ["CC(=O)Cl", "Oc1ccccc1C(=O)O"]}]},
+         "output": {"scores": {"r1": {"feasibility": 0.82, "stock_availability": 1.0, "total": 0.89}}}},
+    ]
+
     def _predict_feasibility(self, product_smiles: str, precursor_smiles_list: list[str]) -> float:
         if not product_smiles or not precursor_smiles_list:
             return 0.0

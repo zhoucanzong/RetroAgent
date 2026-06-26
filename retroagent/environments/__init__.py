@@ -66,11 +66,16 @@ class RetroEnvironment:
                 schema = tool.parameters_schema()
             except (AttributeError, NotImplementedError):
                 schema = {"type": "object", "properties": {}}
-            specs.append({
+            spec = {
                 "name": name,
                 "description": getattr(tool, "description", ""),
                 "parameters": schema,
-            })
+            }
+            # Include examples if the tool provides them (context-engineering hint)
+            examples = getattr(tool, "examples", None)
+            if examples:
+                spec["examples"] = examples
+            specs.append(spec)
         # Always include bash
         specs.append({
             "name": "bash",

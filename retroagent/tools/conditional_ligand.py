@@ -195,6 +195,14 @@ class ConditionalLigandTool:
             "required": ["constraints"],
         }
 
+    examples = [
+        {"input": {"constraints": "N-oxide proline-derived ligand for Strecker", "count": 3},
+         "output": {"candidates": ["O=C([C@@H]1CCC[N+]1[O-])Nc1cccc(NC(=O)[C@@H]2CCC[N+]2[O-])c1"],
+                    "family": "NNOXIDE", "donor_atoms": ["O", "O"]}},
+        {"input": {"constraints": "P,P bidentate phosphine with axial chirality", "count": 3},
+         "output": {"candidates": ["...BINAP/BIPHEP..."], "family": "BINAP", "donor_atoms": ["P", "P"]}},
+    ]
+
     # ------------------------------------------------------------------
 
     @staticmethod

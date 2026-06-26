@@ -13,4 +13,9 @@ models/*.onnx
 models/*.hdf5
 models/uspto_ringbreaker_unique_templates.csv
 models/uspto_unique_templates.csv
+models/unimol_weights/
+models/unimol_checkpoints/
+models/hf_cache/
 papers
+ChemMCP-main
+CHEMMCP_INTEGRATION.md

@@ -16,13 +16,15 @@ RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——*
 
 ## ✨ 核心能力
 
-| 模式                        | 输入            | 核心工具链                                                        | 输出                        |
-| --------------------------- | --------------- | ----------------------------------------------------------------- | --------------------------- |
-| **Retrosynthesis**    | 目标分子 SMILES | `disconnect` → `propose` → `evaluate` → `check_stock`  | 完整合成路线                |
-| **Ligand Design**     | 自然语言约束    | `design_ligand` → `analyze_chirality` → `classify_ligand` | 候选手性配体                |
-| **Catalyst Assembly** | 结构化约束      | `design_catalyst` (配位数/d电子/labile位点计算) → Auditor 审查 | 金属催化剂描述符 + 事实报告 |
-| **Literature Search** | 查询词          | `web_search` (Crossref/S2/PubChem) → `fetch_url`             | 文献命中 + 摘要             |
-| **Chiral Analysis**   | 任意 SMILES     | `analyze_chirality` + `classify_ligand`                       | 手性类型 / R/S / 配位原子   |
+| 模式                         | 输入            | 核心工具链                                                                                  | 输出                        |
+| ---------------------------- | --------------- | ------------------------------------------------------------------------------------------- | --------------------------- |
+| **Retrosynthesis**     | 目标分子 SMILES | `disconnect` → `propose` → `evaluate` → `check_stock`                            | 完整合成路线                |
+| **Ligand Design**      | 自然语言约束    | `design_ligand` → `analyze_chirality` → `classify_ligand`                           | 候选手性配体                |
+| **Catalyst Assembly**  | 结构化约束      | `design_catalyst` (配位数/d电子/labile位点计算) → Auditor 审查                           | 金属催化剂描述符 + 事实报告 |
+| **Literature Search**  | 查询词          | `web_search` (Crossref/S2/PubChem) → `fetch_url`                                       | 文献命中 + 摘要             |
+| **Reaction Mapping**   | 反应 SMILES     | `map_reaction` (rxnmapper 原子映射)                                                       | 原子对原子的成键/断键标注   |
+| **Molecule Profiling** | SMILES          | `molecule_properties` + `functional_groups` + `check_patent` + `convert_identifier` | 性质/官能团/可购性/标识符   |
+| **Chiral Analysis**    | 任意 SMILES     | `analyze_chirality` + `classify_ligand`                                                 | 手性类型 / R/S / 配位原子   |
 
 ---
 
@@ -87,7 +89,12 @@ retroagent/
 │   ├── catalyst.py          # CatalystTool (结构化催化剂计算器，只算不判)
 │   ├── think.py             # ThinkTool (虚拟推理空间，类似 Claude think tool)
 │   ├── web_search.py        # WebSearchTool (免费层文献检索 Crossref/S2/PubChem)
-│   └── fetch_url.py         # FetchUrlTool (URL 抓取 + HTML 清洗)
+│   ├── fetch_url.py         # FetchUrlTool (URL 抓取 + HTML 清洗)
+│   ├── patent.py            # PatentTool (molbloom 可购性/专利检查)
+│   ├── functional_groups.py # FunctionalGroupsTool (50+ SMARTS 官能团识别)
+│   ├── identifiers.py       # IdentifierTool (PubChem name/IUPAC/CAS ↔ SMILES)
+│   ├── properties.py        # PropertiesTool (RDKit 物理化学描述符)
+│   └── reaction_mapper.py   # ReactionMapperTool (rxnmapper 原子映射)
 ├── config/
 │   ├── default.yaml         # 默认配置（模型路径 + LLM + Agent + Environment）
 │   └── config.local.yaml    # 本地覆盖（gitignored，放 API key）
@@ -278,7 +285,8 @@ LLM 根据审查反馈修正并提交
 | Phase 3   | ✅   | Loop Engineering: Think Tool + Dead-Loop Monitor + Enhanced Observation + Adaptive Scaling + Branch Tracking + Design Auditor |
 | Phase 4   | ✅   | Claude 哲学重构: 隔离 Auditor sub-agent + design_catalyst 计算器 + classify_ligand SMARTS 修复 + 上下文压缩                   |
 | Phase 5   | ✅   | 模型侧优化: design_ligand 模板化 + 全免费层 web_search/fetch_url + 文献接地的审查                                             |
-| Phase 6   | ⏳   | Benchmark 评估 + 更强 LLM (Auditor 用 Opus/GPT-4 级)                                                                          |
+| Phase 6   | ✅   | 集成: check_patent/functional_groups/convert_identifier/molecule_properties/map_reaction + examples 元数据增强                |
+| Phase 7   | ⏳   | Benchmark 评估 + 更强 LLM (Auditor 用 Opus/GPT-4 级) + IBM RXN 正向合成（需 key）                                             |
 
 ---
 
@@ -302,6 +310,8 @@ LLM 根据审查反馈修正并提交
 16. **文献接地的审查**：审查前主动 web_search 拉相关文献，作为事实注入隔离快照。Auditor 同时看设计事实 + 真实先例，在一个隔离调用里判断（不让审查器自己调工具，保持单次调用）
 17. **SMARTS 子结构匹配**：`classify_ligand` 用最小特征 SMARTS（any-bond `~` 匹配）而非完整 SMILES，BINAP 现在能匹配 BINAP；N,N'-二氧化物需 ≥2 个 N-oxide 才确认
 18. **ZINC 局限性诚实标注**：ZINC 是虚拟筛选化合物库（17.4M 类药分子），不含 NaBH₄/Pd 催化剂/常用溶剂等试剂。`evaluate` 内置常用试剂 SMARTS 白名单，ZINC 查询前先识别，避免假阴性误导
+19. **分子分析与验证工具集**：`check_patent`(molbloom 可购性)、`functional_groups`(50+ SMARTS)、`convert_identifier`(PubChem name/IUPAC/CAS↔SMILES)、`molecule_properties`(RDKit 物理化学描述符)、`map_reaction`(rxnmapper 原子映射)——覆盖专利/官能团/标识符/性质/反应机理五个维度，全部零成本（本地或免费 API）
+20. **`examples` 元数据增强工具调用可靠性**：结构化输入易错的工具（`evaluate`/`design_ligand`/`design_catalyst`/`convert_identifier`/`map_reaction`）配 Input→Output 示例，渲染进 system prompt，提升首次调用参数正确率（上下文工程）
 
 ---
 
