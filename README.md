@@ -8,6 +8,8 @@
 
 </div>
 
+> 📖 简体中文｜[English version ↓](#-english-version)
+
 RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——**LLM 是唯一的决策中枢，专用化学工具全部退化为纯函数（只计算和获取事实，从不替模型做判断）**，并由独立的隔离审查 sub-agent 纠错、免费层文献检索接地。覆盖逆合成路线规划、手性配体与金属催化剂设计、以及文献查证。
 
 > 智能只存在于 **Planner（LLM）**。专用化学模型（ONNX、模板库、库存、RDKit）与外部检索（文献、URL）全部退化为 **Tool** —— 纯函数，不做决策。判断（路线好坏、催化剂对错）由 LLM 在隔离的审查上下文里完成。
@@ -312,6 +314,71 @@ LLM 根据审查反馈修正并提交
 18. **ZINC 局限性诚实标注**：ZINC 是虚拟筛选化合物库（17.4M 类药分子），不含 NaBH₄/Pd 催化剂/常用溶剂等试剂。`evaluate` 内置常用试剂 SMARTS 白名单，ZINC 查询前先识别，避免假阴性误导
 19. **分子分析与验证工具集**：`check_patent`(molbloom 可购性)、`functional_groups`(50+ SMARTS)、`convert_identifier`(PubChem name/IUPAC/CAS↔SMILES)、`molecule_properties`(RDKit 物理化学描述符)、`map_reaction`(rxnmapper 原子映射)——覆盖专利/官能团/标识符/性质/反应机理五个维度，全部零成本（本地或免费 API）
 20. **`examples` 元数据增强工具调用可靠性**：结构化输入易错的工具（`evaluate`/`design_ligand`/`design_catalyst`/`convert_identifier`/`map_reaction`）配 Input→Output 示例，渲染进 system prompt，提升首次调用参数正确率（上下文工程）
+
+---
+
+## 🌐 English Version
+
+> This is the English version of the Chinese README above. The two are kept in sync; the Chinese version is authoritative.
+
+**RetroAgent** is a chemistry reasoning system inspired by Claude's agent design philosophy — **the LLM is the sole decision-maker, and every specialized chemistry tool is reduced to a pure function that only computes or fetches facts and never makes decisions on the model's behalf.** An independent, isolated review sub-agent catches errors, and a free-tier literature search grounds proposals in real references. It covers retrosynthetic route planning, chiral-ligand and metal-catalyst design, and literature verification.
+
+> Intelligence lives **only in the Planner (LLM)**. Specialized models (ONNX policies, template libraries, stock, RDKit) and external retrieval (literature, URLs) are all reduced to **Tools** — pure functions that make no decisions. Judgments (is a route good? is a catalyst correct?) are made by the LLM inside an isolated review context.
+
+### Core Capabilities
+
+| Mode | Input | Core tool chain | Output |
+| --- | --- | --- | --- |
+| **Retrosynthesis** | target SMILES | `disconnect` → `propose` → `evaluate` → `check_stock` | complete synthetic route |
+| **Ligand Design** | natural-language constraints | `design_ligand` → `analyze_chirality` → `classify_ligand` | candidate chiral ligands |
+| **Catalyst Assembly** | structured constraints | `design_catalyst` (coordination/d-electron/labile-site calc) → Auditor review | metal-catalyst descriptor + fact report |
+| **Literature Search** | query | `web_search` (Crossref/S2/PubChem) → `fetch_url` | literature hits + abstracts |
+| **Reaction Mapping** | reaction SMILES | `map_reaction` (rxnmapper atom mapping) | atom-to-atom bond labels |
+| **Molecule Profiling** | SMILES | `molecule_properties` + `functional_groups` + `check_patent` + `convert_identifier` | properties / FGs / purchasability / identifiers |
+| **Chiral Analysis** | any SMILES | `analyze_chirality` + `classify_ligand` | chirality type / R,S / donor atoms |
+
+### Architecture
+
+The Planner (LLM) is the only decision hub. Tools are pure functions. A shared blackboard holds state (no logic). Two isolated review sub-agents — a Peer Reviewer (retrosynthesis) and a Design Auditor (catalyst/ligand design) — run in fresh contexts on fact-only snapshots, with literature fetched proactively so they judge against real precedents.
+
+Architectural references: **[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)** (agent loop, environment protocol) and **[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder)** (ONNX policy, USPTO templates, RDChiral, ZINC stock).
+
+### Quick Start
+
+```bash
+cd RetroAgent
+pip install -r requirements.txt
+
+# 1. Test tools (no API key needed)
+PYTHONPATH=. python3 -m retroagent.run.retro test-tools "CC(=O)Oc1ccccc1C(=O)O"
+
+# 2. Retrosynthesis
+PYTHONPATH=. python3 -m retroagent.run.retro run "CC(=O)Oc1ccccc1C(=O)O"
+
+# 3. Ligand/catalyst design
+PYTHONPATH=. python3 -m retroagent.run.retro run \
+  "Point chirality ligand with P and O donor atoms" --mode design
+
+# 4. Save trajectory
+PYTHONPATH=. python3 -m retroagent.run.retro run "..." -o /tmp/traj.json
+```
+
+Configuration priority: **env vars > `config.local.yaml` > `default.yaml`**. Set `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL`, or create `retroagent/config/config.local.yaml` with `llm.api_key`. Model files (ONNX/HDF5/ZINC) must be downloaded separately into `models/` — see the Chinese section above for the download links.
+
+### Design Philosophy (in brief)
+
+1. **Tools compute, the model judges** — e.g. `design_catalyst` reports coordination number / d-electrons / labile sites / symmetry candidates and **never** returns REJECT/APPROVE; the LLM (Auditor) interprets.
+2. **Independent review via fresh-context sub-agents** — the Auditor/Reviewer run on a 2-message isolated snapshot (facts only), never on the main conversation, so reviews aren't anchored by the agent's own reasoning.
+3. **Structured representation for hard cases** — metal complexes are described as organic-ligand SMILES + metal/geometry fields rather than a single organometallic SMILES.
+4. **Context engineering over more code** — a `think` tool for explicit reasoning, dynamic branch-tracking tables, and idempotent context compaction keep 100-step runs viable.
+5. **Deterministic generation + free-tier retrieval** — `design_ligand` uses a curated scaffold library + RDKit enumeration; `web_search` uses Crossref / Semantic Scholar / PubChem (no API key).
+6. **Mode-aware auditing with literature grounding** — the Auditor gets real papers fetched up front and judges designs against them.
+
+See the Chinese "关键设计决策" section above for the full list (20 points).
+
+### Current Status
+
+Phases 1–6 complete: project skeleton, shared blackboard, environment + tools, Planner loop, YAML config, ring-breaker policy, end-to-end LLM-driven planning, loop engineering (think tool + dead-loop monitor + adaptive scaling + branch tracking), Claude-philosophy refactor (isolated auditor + `design_catalyst` calculator + SMARTS fix + context compaction), model-side optimization (template `design_ligand` + free-tier `web_search`/`fetch_url` + literature-grounded review), and a molecule-analysis tool layer (`check_patent` / `functional_groups` / `convert_identifier` / `molecule_properties` / `map_reaction`) plus `examples` metadata for tool-call reliability. Phase 7 (benchmark evaluation + stronger LLM for the Auditor + IBM RXN forward synthesis) is pending.
 
 ---
 
