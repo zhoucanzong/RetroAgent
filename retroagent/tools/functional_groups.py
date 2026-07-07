@@ -13,25 +13,27 @@ from rdkit import Chem
 
 
 # Curated functional-group SMARTS (subset of RDKit FGSMARTS, chemically standard).
-# Alcohol patterns use [CX4] (sp3 carbon) to avoid matching carboxylic-acid / carbonyl carbons.
+# Patterns are intentionally specific enough to avoid common cross-talk:
+# carboxylic acids should not look like alcohols, esters should not look like
+# ethers, and carboxylic acids should not look like aldehydes or ketones.
 FUNCTIONAL_GROUPS = {
-    "alcohol_primary": "[CH2][OH]",
-    "alcohol_secondary": "[CH1][OH]",
-    "alcohol_tertiary": "[CH0X4][OH]",
-    "phenol": "c[OH]",
-    "aldehyde": "[CX3H1](=O)[#6]",
-    "ketone": "[CX3](=O)[#6]",
-    "carboxylic_acid": "[CX3](=O)[OH]",
-    "ester": "[CX3](=O)O[#6]",
-    "amide": "[CX3](=O)[#7]",
-    "primary_amine": "[NX3H2]",
-    "secondary_amine": "[NX3H1]",
-    "tertiary_amine": "[NX3H0]",
+    "alcohol_primary": "[CX4H2][OX2H]",
+    "alcohol_secondary": "[CX4H1][OX2H]",
+    "alcohol_tertiary": "[CX4H0][OX2H]",
+    "phenol": "[c][OX2H]",
+    "aldehyde": "[#6][CX3H1](=O)",
+    "ketone": "[#6][CX3](=O)[#6]",
+    "carboxylic_acid": "[#6][CX3](=O)[OX2H1]",
+    "ester": "[#6][CX3](=O)[OX2H0][#6]",
+    "amide": "[#6][CX3](=O)[NX3]",
+    "primary_amine": "[NX3H2;!$(NC=O)]",
+    "secondary_amine": "[NX3H1;!$(NC=O)]",
+    "tertiary_amine": "[NX3H0;!$(NC=O)]",
     "aniline": "c[NX3]",
     "nitrile": "C#N",
     "isocyanate": "N=C=O",
     "nitro": "[NX3+](=O)[O-]",
-    "ether": "[OD2]([#6])[#6]",
+    "ether": "[#6;!$(C=O)][OD2H0][#6;!$(C=O)]",
     "epoxide": "C1OC1",
     "peroxide": "OO",
     "thiol": "[#6][SX2H]",
@@ -72,6 +74,54 @@ FUNCTIONAL_GROUPS = {
     "anhydride": "C(=O)OC(=O)",
 }
 
+BROAD_GROUP_ALIASES = {
+    "carboxylic_acid": ("carboxylic_acid",),
+    "ester": ("ester",),
+    "amide": ("amide",),
+    "alcohol": ("alcohol_primary", "alcohol_secondary", "alcohol_tertiary"),
+    "phenol": ("phenol",),
+    "amine": ("primary_amine", "secondary_amine", "tertiary_amine"),
+    "aniline": ("aniline",),
+    "ketone": ("ketone",),
+    "aldehyde": ("aldehyde",),
+    "sulfonamide": ("sulfonamide",),
+    "nitro": ("nitro",),
+    "halide": ("halide_fluoride", "halide_chloride", "halide_bromide", "halide_iodide"),
+    "nitrile": ("nitrile",),
+    "alkene": ("alkene",),
+    "alkyne": ("alkyne",),
+    "ether": ("ether",),
+}
+
+
+def scan_functional_groups(mol: Chem.Mol) -> tuple[dict[str, int], list[str]]:
+    """Return exact functional-group match counts and absent exact group names."""
+    present = {}
+    absent = []
+    for name, smarts in FUNCTIONAL_GROUPS.items():
+        pat = Chem.MolFromSmarts(smarts)
+        if pat is None:
+            continue
+        n = len(mol.GetSubstructMatches(pat))
+        if n > 0:
+            present[name] = n
+        else:
+            absent.append(name)
+    return present, absent
+
+
+def summarize_broad_functional_groups(mol: Chem.Mol) -> dict[str, list[str]]:
+    """Return broad group names for planner prompts and quick model sanity checks."""
+    exact_present, _ = scan_functional_groups(mol)
+    present = []
+    absent = []
+    for broad_name, exact_names in BROAD_GROUP_ALIASES.items():
+        if any(name in exact_present for name in exact_names):
+            present.append(broad_name)
+        else:
+            absent.append(broad_name)
+    return {"present": present, "absent": absent}
+
 
 class FunctionalGroupsTool:
     name = "functional_groups"
@@ -89,17 +139,7 @@ class FunctionalGroupsTool:
         if mol is None:
             return json.dumps({"error": f"Invalid SMILES: {smiles}"}, ensure_ascii=False)
 
-        present = {}
-        absent = []
-        for name, smarts in FUNCTIONAL_GROUPS.items():
-            pat = Chem.MolFromSmarts(smarts)
-            if pat is None:
-                continue
-            n = len(mol.GetSubstructMatches(pat))
-            if n > 0:
-                present[name] = n
-            else:
-                absent.append(name)
+        present, absent = scan_functional_groups(mol)
 
         return json.dumps({
             "smiles": smiles,

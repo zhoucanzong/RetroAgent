@@ -6,6 +6,8 @@ Phase 4: Branch tracking for route exploration status table.
 import time
 from dataclasses import dataclass, field
 
+from retroagent.route_graph import RouteGraph
+
 
 @dataclass
 class SharedBlackboard:
@@ -33,6 +35,7 @@ class SharedBlackboard:
     mode: str = "retrosynthesis"
     design_candidates: list[dict] = field(default_factory=list)
     design_evaluations: list[dict] = field(default_factory=list)
+    route_graph: RouteGraph = field(default_factory=RouteGraph)
 
     # Phase 4: Branch tracking for route exploration status
     # Each branch: {id, bond_name, template_index, classification, best_score,
@@ -54,6 +57,9 @@ class SharedBlackboard:
         self.design_candidates.clear()
         self.design_evaluations.clear()
         self.branches.clear()
+        self.route_graph = RouteGraph()
+        if mode in ("retrosynthesis", "discovery"):
+            self.route_graph.add_target(smiles)
         try:
             from rdkit import Chem
             mol = Chem.MolFromSmiles(smiles)
@@ -86,6 +92,7 @@ class SharedBlackboard:
                 # Phase 4: branch tracking
                 "branch_count": len(self.branches),
                 "branch_table": branch_table,
+                "route_graph": self.route_graph.stats(),
             }
         }
 
@@ -97,6 +104,8 @@ class SharedBlackboard:
                 self.disconnection_results = result.get("bonds", [])
             case "propose":
                 self.proposal_results = result.get("reactions", [])
+                for reaction in self.proposal_results:
+                    self.route_graph.add_reaction(reaction, target=self.target_smiles)
             case "evaluate":
                 self.scores |= result.get("scores", {})
             case "search_literature":
@@ -104,6 +113,7 @@ class SharedBlackboard:
             case "check_stock":
                 for smi, src in result.get("in_stock", {}).items():
                     self.stock_hits[smi] = src
+                    self.route_graph.mark_stock(smi, source=src)
             case "analyze_chirality":
                 self.design_evaluations.append({"tool": "analyze_chirality", "result": result})
             case "classify_ligand":

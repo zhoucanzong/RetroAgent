@@ -186,35 +186,8 @@ class DisconnectionTool:
     def _analyze_functional_groups(mol: Chem.Mol) -> dict:
         """Detect functional groups present/absent in the molecule.
         Returns two lists so the LLM can cross-check model predictions."""
-        patterns = {
-            "carboxylic_acid": "C(=O)O",
-            "ester": "C(=O)OC",
-            "amide": "C(=O)N",
-            "alcohol": "CO",
-            "phenol": "cO",
-            "amine": "CN",
-            "aniline": "cN",
-            "ketone": "CC(=O)C",
-            "aldehyde": "C=O",
-            "sulfonamide": "S(=O)(=O)N",
-            "nitro": "N(=O)=O",
-            "halide": "[F,Cl,Br,I]",
-            "nitrile": "C#N",
-            "alkene": "C=C",
-            "alkyne": "C#C",
-            "ether": "COC",
-        }
-        present = []
-        absent = []
-        for name, smarts in patterns.items():
-            pat = Chem.MolFromSmarts(smarts)
-            if pat is None:
-                continue
-            if mol.HasSubstructMatch(pat):
-                present.append(name)
-            else:
-                absent.append(name)
-        return {"present": present, "absent": absent}
+        from retroagent.tools.functional_groups import summarize_broad_functional_groups
+        return summarize_broad_functional_groups(mol)
 
     def _cutoff_predictions(self, predictions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         sortidx = np.argsort(predictions)[::-1]
@@ -252,4 +225,3 @@ class DisconnectionTool:
             return list(set(bond_indices))
         except Exception:
             return []
-

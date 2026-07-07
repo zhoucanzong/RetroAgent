@@ -13,6 +13,7 @@ import pandas as pd
 from pathlib import Path
 from rdkit import Chem
 from rdkit.Chem import AllChem, DataStructs
+from retroagent.schemas import build_reaction_record
 
 # Try to import aizynthfinder from the filesystem
 try:
@@ -78,21 +79,22 @@ class ProposalTool:
         attempts = template_indices[:max_results] if template_indices else []
         for tid in attempts:
             row = self._templates.iloc[tid]
-            rxns = self._try_template(tree_mol, tid, row)
+            rxns = self._try_template(tree_mol, tid, row, smiles)
             reactions.extend(rxns)
         model_match_count = len(reactions)
 
         # Phase 2: if requested AND model predictions failed, fall back to substructure scan
         if not model_match_count and use_fallback and _has_aizynthfinder:
-            reactions = self._fallback_scan(tree_mol, max_results)
+            reactions = self._fallback_scan(tree_mol, smiles, max_results)
 
-        # Dedup
+        # Dedup and assign stable ids after ordering is finalized.
         seen = set()
         unique = []
         for r in reactions:
-            key = ".".join(sorted(r["precursors"]))
+            key = ".".join(sorted(r["precursor_smiles_list"]))
             if key not in seen:
                 seen.add(key)
+                r["id"] = f"rxn_{len(unique) + 1}"
                 unique.append(r)
 
         return json.dumps({
@@ -102,7 +104,7 @@ class ProposalTool:
             "fallback_used": bool(not model_match_count and use_fallback and reactions),
         }, ensure_ascii=False)
 
-    def _try_template(self, tree_mol, tid: int, row) -> list[dict]:
+    def _try_template(self, tree_mol, tid: int, row, product_smiles: str) -> list[dict]:
         """Try to apply a single template to the molecule."""
         smarts = row["retro_template"]
         classification = str(row.get("classification", ""))
@@ -114,24 +116,25 @@ class ProposalTool:
                 precursor_clean = []
                 for m in rct_set:
                     precursor_clean.append(Chem.MolToSmiles(m.rd_mol, canonical=True))
-                results.append({
-                    "template_index": int(tid),
-                    "classification": classification,
-                    "library_occurrence": occurrence,
-                    "precursors": precursor_clean,
-                })
+                results.append(self._build_reaction_record(
+                    product_smiles=product_smiles,
+                    precursor_smiles_list=precursor_clean,
+                    template_index=int(tid),
+                    classification=classification,
+                    library_occurrence=occurrence,
+                ))
         except Exception:
             pass
         return results
 
-    def _fallback_scan(self, tree_mol, max_results: int) -> list[dict]:
+    def _fallback_scan(self, tree_mol, product_smiles: str, max_results: int) -> list[dict]:
         """Scan template library for any that match the molecule.
         Returns results ranked by library_occurrence (most common reactions first)."""
         all_matches = []
         limit = min(self._fallback_scan_limit, len(self._templates))
         for i in range(limit):
             row = self._templates.iloc[i]
-            rxns = self._try_template(tree_mol, i, row)
+            rxns = self._try_template(tree_mol, i, row, product_smiles)
             all_matches.extend(rxns)
             if len(all_matches) >= max_results * 3:
                 break
@@ -139,6 +142,24 @@ class ProposalTool:
         # Sort by occurrence count (more common = more reliable)
         all_matches.sort(key=lambda x: -x["library_occurrence"])
         return all_matches[:max_results]
+
+    @staticmethod
+    def _build_reaction_record(
+        *,
+        product_smiles: str,
+        precursor_smiles_list: list[str],
+        template_index: int,
+        classification: str,
+        library_occurrence: int,
+    ) -> dict:
+        """Return the canonical reaction schema shared with EvaluationTool."""
+        return build_reaction_record(
+            product_smiles=product_smiles,
+            precursor_smiles_list=precursor_smiles_list,
+            template_index=template_index,
+            classification=classification,
+            library_occurrence=library_occurrence,
+        )
 
     def parameters_schema(self) -> dict:
         return {

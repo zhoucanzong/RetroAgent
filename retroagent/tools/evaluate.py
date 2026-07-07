@@ -11,6 +11,7 @@ from onnxruntime import InferenceSession
 from pathlib import Path
 from rdkit import Chem
 from rdkit.Chem import AllChem, DataStructs
+from retroagent.schemas import normalize_reaction_record
 
 
 class EvaluationTool:
@@ -129,12 +130,13 @@ class EvaluationTool:
     def execute(self, parameters: dict) -> str:
         route_ids = parameters.get("route_ids", [])
         target = parameters.get("target", "")
-        reactions = parameters.get("reactions", [])  # list of {id, product_smiles, precursor_smiles_list}
+        reactions = parameters.get("reactions", [])  # list of canonical reaction records
         scores = {}
-        for rxn in reactions:
-            rid = rxn.get("id", "unknown")
-            precursor_list = rxn.get("precursor_smiles_list", [])
-            feasibility = self._predict_feasibility(rxn.get("product_smiles", ""), precursor_list)
+        for i, rxn in enumerate(reactions, 1):
+            normalized = self._normalize_reaction(rxn, target=target, index=i)
+            rid = normalized["id"]
+            precursor_list = normalized["precursor_smiles_list"]
+            feasibility = self._predict_feasibility(normalized["product_smiles"], precursor_list)
             stock_avail = self._check_stock_availability(precursor_list)
             trivial_bonus = self._trivial_precursor_score(precursor_list)
             scores[rid] = {
@@ -166,6 +168,11 @@ class EvaluationTool:
             },
             "required": ["reactions"]
         }
+
+    @staticmethod
+    def _normalize_reaction(rxn: dict, *, target: str = "", index: int = 1) -> dict:
+        """Normalize old and new reaction payloads into the canonical schema."""
+        return normalize_reaction_record(rxn, target=target, index=index)
 
     examples = [
         {"input": {"reactions": [{"id": "r1", "product_smiles": "CC(=O)Oc1ccccc1C(=O)O",

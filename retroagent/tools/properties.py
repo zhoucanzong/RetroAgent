@@ -100,7 +100,7 @@ class PropertiesTool:
             "reactivity_alerts": reactive_alerts,
             "note": ("RDKit descriptors (deterministic). logP/TPSA are calculated, "
                      "not measured. For ML toxicity/solubility prediction, see "
-                     "CHEMMCP_INTEGRATION.md Uni-Mol note (currently unavailable)."),
+                     "word.md Uni-Mol note (currently unavailable)."),
         }, ensure_ascii=False)
 
     def parameters_schema(self) -> dict:

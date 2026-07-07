@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from retroagent.tool_graph import summarize_tool_graph
+
 
 class RetroEnvConfig(BaseModel):
     timeout: int = 120
@@ -89,6 +91,9 @@ class RetroEnvironment:
             },
         })
         return specs
+
+    def get_tool_graph_summary(self) -> str:
+        return summarize_tool_graph([spec["name"] for spec in self.get_tools_spec()])
 
     def _execute_bash(self, parameters: dict) -> dict[str, Any]:
         command = parameters.get("command", "")

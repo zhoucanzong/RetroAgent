@@ -87,6 +87,11 @@ class RetroPlanner:
             "max_search_depth": self.config.max_search_depth,
             "search_strategy": self.config.search_strategy,
             "tools_spec": self.env.get_tools_spec(),
+            "tool_graph_summary": (
+                self.env.get_tool_graph_summary()
+                if hasattr(self.env, "get_tool_graph_summary")
+                else ""
+            ),
         }
         # Merge config dump
         result |= self.config.model_dump()
@@ -119,7 +124,7 @@ class RetroPlanner:
             self.blackboard.initialize(task, mode=mode)
 
         # Auto-tune parameters based on molecular complexity
-        if self.config.enable_auto_tune and mode == "retrosynthesis":
+        if self.config.enable_auto_tune and mode in ("retrosynthesis", "discovery"):
             self._auto_tune_from_complexity()
 
         # Add system and user messages
@@ -577,7 +582,7 @@ class RetroPlanner:
 
         # Determine if progress was made — depends on mode
         has_progress = False
-        if self.blackboard.mode == "retrosynthesis":
+        if self.blackboard.mode in ("retrosynthesis", "discovery"):
             has_progress = (
                 bool(self.blackboard.scores)
                 or bool(self.blackboard.stock_hits)
@@ -625,7 +630,7 @@ class RetroPlanner:
             return ""
 
         # Retrosynthesis mode: check scores
-        if self.blackboard.mode == "retrosynthesis":
+        if self.blackboard.mode in ("retrosynthesis", "discovery"):
             scores = self.blackboard.scores
             stock = self.blackboard.stock_hits
             if not scores:

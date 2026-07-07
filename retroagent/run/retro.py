@@ -9,6 +9,7 @@ import typer
 
 from retroagent import package_dir, models_dir, get_config
 from retroagent.agents.planner import RetroPlanner
+from retroagent.benchmark import load_discovery_cases, run_discovery_cases, write_jsonl
 from retroagent.blackboard import SharedBlackboard
 from retroagent.environments import RetroEnvironment
 from retroagent.tools.disconnect import DisconnectionTool
@@ -29,6 +30,10 @@ from retroagent.tools.functional_groups import FunctionalGroupsTool
 from retroagent.tools.identifiers import IdentifierTool
 from retroagent.tools.properties import PropertiesTool
 from retroagent.tools.reaction_mapper import ReactionMapperTool
+from retroagent.tools.chemical_critic import ChemicalCriticTool
+from retroagent.tools.experiment_designer import ExperimentDesignerTool
+from retroagent.tools.research_memory import ResearchMemoryTool
+from retroagent.tools.research_report import ResearchReportTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -243,6 +248,10 @@ def _build_environment() -> RetroEnvironment:
     env.register("convert_identifier", IdentifierTool())    # name/IUPAC/CAS <-> SMILES (PubChem)
     env.register("molecule_properties", PropertiesTool())   # RDKit physicochemical descriptors
     env.register("map_reaction", ReactionMapperTool())      # rxnmapper atom-to-atom mapping
+    env.register("chemical_critic", ChemicalCriticTool())   # deterministic route hypothesis audit
+    env.register("design_experiments", ExperimentDesignerTool())  # critic issue -> validation plan
+    env.register("build_research_report", ResearchReportTool())  # discovery hypothesis schema audit
+    env.register("research_memory", ResearchMemoryTool())   # local JSONL discovery memory
 
     return env
 
@@ -254,7 +263,7 @@ def _build_environment() -> RetroEnvironment:
 @app.command()
 def run(
     task: str = typer.Argument(..., help="Target molecule SMILES or design constraints"),
-    mode: str = typer.Option("retrosynthesis", "--mode", help="Mode: retrosynthesis | design"),
+    mode: str = typer.Option("retrosynthesis", "--mode", help="Mode: retrosynthesis | discovery | design"),
     model: str | None = typer.Option(None, "-m", "--model", help="LLM model name (overrides config)"),
     api_key: str | None = typer.Option(None, "--api-key", help="API key (overrides config)"),
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL (overrides config)"),
@@ -400,7 +409,8 @@ def test_tools(
         reactions = r.get("reactions", [])
         print(f"  propose(use_fallback=True):  {r.get('count', 0)} reactions  ← LLM chooses")
         for rx in reactions[:3]:
-            print(f"    [{rx['classification']} occ={rx['library_occurrence']}] {rx['precursors']}")
+            precursors = rx.get("precursor_smiles_list", rx.get("precursors", []))
+            print(f"    {rx.get('id', '?')} [{rx['classification']} occ={rx['library_occurrence']}] {precursors}")
 
     # 4. Evaluate
     print("--- EvaluationTool ---")
@@ -414,12 +424,105 @@ def test_tools(
     print("--- StockTool ---")
     all_precursors = []
     for rx in reactions[:3]:
-        all_precursors.extend(rx.get("precursors", []))
+        all_precursors.extend(rx.get("precursor_smiles_list", rx.get("precursors", [])))
     if all_precursors:
         r = json.loads(env.execute({"tool": "check_stock", "parameters": {"smiles_list": all_precursors[:10]}})["output"])
         print(f"  In stock: {len(r.get('in_stock', {}))}/{r.get('total_checked', 0)}")
         for smi in r.get("in_stock", {}):
             print(f"    {smi}: {r['in_stock'][smi]}")
+
+
+@app.command("benchmark-discovery")
+def benchmark_discovery(
+    cases: Path = typer.Option(
+        Path("benchmarks/discovery_small.jsonl"),
+        "--cases",
+        help="Discovery benchmark JSONL file",
+    ),
+    output_dir: Path = typer.Option(
+        Path("logs/discovery_benchmark"),
+        "--output-dir",
+        help="Directory for trajectories and benchmark results",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--run",
+        help="Validate benchmark cases without calling the LLM unless --run is used",
+    ),
+    limit: int | None = typer.Option(None, "--limit", help="Limit number of cases"),
+    model: str | None = typer.Option(None, "-m", "--model", help="LLM model name (overrides config)"),
+    api_key: str | None = typer.Option(None, "--api-key", help="API key (overrides config)"),
+    base_url: str | None = typer.Option(None, "--base-url", help="API base URL (overrides config)"),
+    max_steps: int = typer.Option(60, "--max-steps", help="Maximum planning steps per case"),
+) -> None:
+    """Run or dry-run the discovery benchmark suite."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
+    loaded_cases = load_discovery_cases(cases)
+    if limit is not None:
+        loaded_cases = loaded_cases[:limit]
+
+    cfg = get_config()
+    llm_model = model or cfg.llm_model
+    llm_api_key = api_key or cfg.llm_api_key
+    llm_base_url = base_url or cfg.llm_base_url
+
+    def _runner(case, trajectory_path: Path) -> dict:
+        if not llm_api_key:
+            raise RuntimeError("No API key set. Use --dry-run, --api-key, or LLM_API_KEY.")
+        env = _build_environment()
+        llm = LLMClient(
+            model=llm_model,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            temperature=cfg.llm_temperature,
+            max_tokens=cfg.llm_max_tokens,
+            max_retries=cfg.llm_max_retries,
+        )
+        planner = RetroPlanner(
+            llm, env, SharedBlackboard(),
+            system_template=cfg.agent_system_template,
+            instance_template=cfg.agent_instance_template,
+            step_limit=max_steps,
+            cost_limit=cfg.agent_cost_limit,
+            wall_time_limit_seconds=cfg.agent_wall_time_limit_seconds,
+            max_search_depth=cfg.agent_max_search_depth,
+            search_strategy=cfg.agent_search_strategy,
+            max_consecutive_format_errors=cfg.agent_max_consecutive_format_errors,
+            output_path=trajectory_path,
+            enable_reflection=cfg.agent_enable_reflection,
+            enable_backtracking=cfg.agent_enable_backtracking,
+            backtrack_score_threshold=cfg.agent_backtrack_score_threshold,
+            backtrack_patience=cfg.agent_backtrack_patience,
+            enable_repeated_action_guard=cfg.agent_enable_repeated_action_guard,
+            max_repeated_actions=cfg.agent_max_repeated_actions,
+            enable_schema_validation=cfg.agent_enable_schema_validation,
+            enable_dead_loop_monitor=cfg.agent_enable_dead_loop_monitor,
+            cycling_window=cfg.agent_cycling_window,
+            stagnation_rounds=cfg.agent_stagnation_rounds,
+            semantic_repeat_threshold=cfg.agent_semantic_repeat_threshold,
+            enable_early_exit_hint=cfg.agent_enable_early_exit_hint,
+            early_exit_score_threshold=cfg.agent_early_exit_score_threshold,
+            enable_enhanced_observation=cfg.agent_enable_enhanced_observation,
+            enable_auto_tune=cfg.agent_enable_auto_tune,
+            enable_design_auditor=cfg.agent_enable_design_auditor,
+        )
+        return planner.run(task=case.task_prompt(), mode="discovery")
+
+    results = run_discovery_cases(
+        loaded_cases,
+        output_dir=output_dir,
+        runner=_runner,
+        dry_run=dry_run,
+    )
+    result_path = output_dir / "results.jsonl"
+    write_jsonl(result_path, [result.to_dict() for result in results])
+    passed = sum(1 for result in results if result.metrics.get("rubric", {}).get("overall_pass"))
+    shape_passed = sum(1 for result in results if result.metrics.get("passes_shape_check"))
+    print(f"Discovery benchmark cases: {len(results)}")
+    print(f"Mode: {'dry-run' if dry_run else 'run'}")
+    print(f"Rubric passed: {passed}/{len(results)}")
+    print(f"Shape checks passed: {shape_passed}/{len(results)}")
+    print(f"Results saved to: {result_path}")
 
 
 if __name__ == "__main__":
