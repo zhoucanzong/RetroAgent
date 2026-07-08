@@ -165,6 +165,15 @@ class RetroPlanner:
             if self.messages:
                 recent = [m for m in self.messages[-3:] if m.get("role") == "assistant"]
                 if any("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in m.get("content", "") for m in recent):
+                    if self.blackboard.mode == "discovery" and not self._discovery_submission_ready():
+                        self.add_messages(self._format_message(
+                            "user",
+                            "<system_warning>\n"
+                            "- Discovery submission blocked: complete the required workflow before final output. "
+                            f"{self._discovery_workflow_hint()}\n"
+                            "</system_warning>"
+                        ))
+                        continue
                     break
                 # Or check exit_status in extra dict on any recent message
                 if any(m.get("extra", {}).get("exit_status") for m in self.messages[-3:]):
@@ -476,10 +485,12 @@ class RetroPlanner:
                 self._review_count = 2  # effectively skip review for simple molecules
             elif n_atoms < 30 and n_rings <= 3:
                 self._complexity_level = "moderate"
-                self.config.step_limit = max(self.config.step_limit, 100)
+                if self.config.step_limit >= 100:
+                    self.config.step_limit = max(self.config.step_limit, 100)
             else:
                 self._complexity_level = "complex"
-                self.config.step_limit = max(self.config.step_limit, 150)
+                if self.config.step_limit >= 100:
+                    self.config.step_limit = max(self.config.step_limit, 150)
                 self.config.backtrack_patience = max(self.config.backtrack_patience, 3)
 
             self._last_progress_round = 0  # reset after auto-tune
@@ -642,6 +653,15 @@ class RetroPlanner:
                     best_score = total
             if best_score >= self.config.early_exit_score_threshold:
                 stock_count = len(stock) if stock else 0
+                if self.blackboard.mode == "discovery" and not self._discovery_submission_ready():
+                    return (
+                        f"<system_hint>\n"
+                        f"Good candidate reactions detected (best score: {best_score:.3f}, "
+                        f"{stock_count} precursors in stock, {len(scores)} routes evaluated), "
+                        f"but discovery mode is not ready for final submission. "
+                        f"{self._discovery_workflow_hint()}\n"
+                        f"</system_hint>"
+                    )
                 return (
                     f"<system_hint>\n"
                     f"Good routes detected (best score: {best_score:.3f}, "
@@ -667,6 +687,82 @@ class RetroPlanner:
                 )
 
         return ""
+
+    def _discovery_submission_ready(self) -> bool:
+        """Require the structured discovery workflow before final submission."""
+        if self.blackboard.mode != "discovery":
+            return True
+        called = self._called_tools()
+        return (
+            "score_routes" in called
+            and "chemical_critic" in called
+            and "design_experiments" in called
+            and "build_research_report" in called
+            and self._memory_recorded()
+        )
+
+    def _discovery_workflow_hint(self, current_tools: set[str] | None = None) -> str:
+        """Return a next-step guardrail for discovery mode, or empty string."""
+        if self.blackboard.mode != "discovery":
+            return ""
+        called = self._called_tools()
+        if current_tools:
+            called |= current_tools
+        has_candidates = bool(self.blackboard.proposal_results or self.blackboard.scores)
+        if not called:
+            return (
+                "Discovery workflow next step: first call `research_memory` with operation='search' "
+                "or operation='summarize', then ground the target with functional/property/literature tools."
+            )
+        if has_candidates and "score_routes" not in called:
+            return (
+                "Discovery workflow next step: call `score_routes` using the proposed reactions and stock hits. "
+                "Do not write final route portfolios from isolated reaction scores."
+            )
+        if "score_routes" in called and "chemical_critic" not in called:
+            return (
+                "Discovery workflow next step: call `chemical_critic` with hypotheses, reactions, scored routes, "
+                "route graph, scores, stock, literature, mapping, and condition evidence."
+            )
+        if "chemical_critic" in called and "design_experiments" not in called:
+            return (
+                "Discovery workflow next step: call `design_experiments` to turn critic issues into controls, "
+                "success criteria, failure diagnostics, and decision points."
+            )
+        if "design_experiments" in called and "build_research_report" not in called:
+            return (
+                "Discovery workflow next step: call `build_research_report` so each route hypothesis has claim, "
+                "evidence, risk review, and next experiment."
+            )
+        if "build_research_report" in called and not self._memory_recorded():
+            return (
+                "Discovery workflow next step: call `research_memory` with operation='record' to persist the "
+                "hypotheses, critic report, experiment plan, route graph summary, outcome, tags, and notes."
+            )
+        return ""
+
+    def _called_tools(self) -> set[str]:
+        tools = set()
+        for message in self.messages:
+            content = message.get("content", "") or ""
+            if "<tool>" not in content:
+                continue
+            if "<returncode>" in content and "<returncode>0</returncode>" not in content:
+                continue
+            try:
+                tools.add(content.split("<tool>", 1)[1].split("</tool>", 1)[0].strip())
+            except IndexError:
+                continue
+        return tools
+
+    def _memory_recorded(self) -> bool:
+        for message in self.messages:
+            content = message.get("content", "") or ""
+            if "<tool>research_memory</tool>" in content and '"status": "recorded"' in content:
+                return True
+            if "<tool>research_memory</tool>" in content and '"status":"recorded"' in content:
+                return True
+        return False
 
     def _check_evaluate_loop(self, action: dict) -> str:
         """0E — Detect repeated evaluate on the same route_ids."""
@@ -1038,6 +1134,10 @@ class RetroPlanner:
             if not valid:
                 warnings.append(f"Invalid action skipped: {reason}")
                 continue
+            allowed, reason = self._discovery_action_allowed(action)
+            if not allowed:
+                warnings.append(f"Discovery workflow blocked `{action.get('tool', 'bash')}`: {reason}")
+                continue
             if self._check_repeated_action(action):
                 warnings.append(
                     f"Repeated action detected for `{action['tool']}`; skipping to avoid loops."
@@ -1066,6 +1166,11 @@ class RetroPlanner:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
+        auto_scoring = self._auto_score_routes_if_needed()
+        if auto_scoring:
+            outputs.append(auto_scoring)
+            filtered_actions.append(auto_scoring[0])
+
         # Run dead-loop monitor per action
         for action in filtered_actions:
             loop_warnings = self._run_dead_loop_checks(action)
@@ -1076,6 +1181,85 @@ class RetroPlanner:
         return self.add_messages(
             *self._format_observations(outputs, warnings, should_backtrack, backtrack_msg)
         )
+
+    def _discovery_action_allowed(self, action: dict) -> tuple[bool, str]:
+        """Hard-gate discovery mode so the model cannot skip the research workflow."""
+        if self.blackboard.mode != "discovery":
+            return True, ""
+
+        tool = action.get("tool", "")
+        if tool == "think":
+            return True, ""
+
+        called = self._called_tools()
+        has_candidates = bool(self.blackboard.proposal_results or self.blackboard.scores)
+        if has_candidates and "score_routes" not in called and tool != "score_routes":
+            return (
+                False,
+                "candidate reactions exist; call `score_routes` before auxiliary checks or final synthesis claims.",
+            )
+        if "score_routes" in called and "chemical_critic" not in called and tool != "chemical_critic":
+            return (
+                False,
+                "scored routes require `chemical_critic` before additional route development.",
+            )
+        if "chemical_critic" in called and "design_experiments" not in called and tool != "design_experiments":
+            return (
+                False,
+                "critic findings must be converted into `design_experiments` before continuing.",
+            )
+        if (
+            "design_experiments" in called
+            and "build_research_report" not in called
+            and tool != "build_research_report"
+        ):
+            return (
+                False,
+                "experiment plans must be consolidated with `build_research_report`.",
+            )
+        if (
+            "build_research_report" in called
+            and not self._memory_recorded()
+            and tool != "research_memory"
+        ):
+            return (
+                False,
+                "the discovery record must be persisted with `research_memory` operation='record'.",
+            )
+        return True, ""
+
+    def _auto_score_routes_if_needed(self) -> tuple[dict, dict] | None:
+        """Automatically score route candidates once propose/check_stock has populated state."""
+        if self.blackboard.mode != "discovery":
+            return None
+        if "score_routes" in self._called_tools():
+            return None
+        if not self.blackboard.proposal_results:
+            return None
+        if "score_routes" not in self._tool_schemas:
+            return None
+
+        action = {
+            "tool": "score_routes",
+            "parameters": {
+                "target_smiles": self.blackboard.target_smiles,
+                "reactions": self.blackboard.proposal_results,
+                "stock_hits": self.blackboard.stock_hits,
+                "max_depth": min(6, max(3, self.config.max_search_depth)),
+                "max_routes": 20,
+            },
+        }
+        result = self.env.execute(action)
+        self._record_action(action)
+        self._tool_sequence.append("score_routes")
+        if result.get("returncode") == 0:
+            try:
+                parsed = json.loads(result.get("output", "{}"))
+                self.blackboard.update("score_routes", parsed)
+                self._track_branch_from_action(action, parsed)
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+        return action, result
 
     def _format_observations(
         self,
@@ -1147,6 +1331,20 @@ class RetroPlanner:
             obs.append(self._format_message(
                 "user",
                 "<system_warning>\n" + "\n".join(f"- {w}" for w in warnings) + "\n</system_warning>"
+            ))
+
+        current_tools = {
+            action.get("tool", "")
+            for action, out in outputs
+            if out.get("returncode") == 0
+        }
+        discovery_hint = self._discovery_workflow_hint(current_tools=current_tools)
+        if discovery_hint:
+            obs.append(self._format_message(
+                "user",
+                "<discovery_workflow_guard>\n"
+                f"{discovery_hint}\n"
+                "</discovery_workflow_guard>"
             ))
 
         if backtrack:

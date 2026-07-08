@@ -118,6 +118,16 @@ Next experiment: test precursor stability.
             },
             {
                 "role": "user",
+                "content": (
+                    "<tool>score_routes</tool>\n<output>\n"
+                    "{\"routes\":[{\"id\":\"route_1\",\"score\":0.95,\"metadata\":{\"solved\":true}},"
+                    "{\"id\":\"route_2\",\"score\":0.55,\"metadata\":{\"solved\":false}}],"
+                    "\"summary\":{\"solved_route_count\":1,\"best_score\":0.95}}\n"
+                    "</output>"
+                ),
+            },
+            {
+                "role": "user",
                 "content": "<tool>check_stock</tool>\n<output>\n{\"in_stock\":{\"CCO\":\"test\"}}\n</output>",
             },
             {
@@ -169,9 +179,12 @@ Next experiment: test precursor stability.
 
         metrics = analyze_trajectory(messages)
 
-        self.assertEqual(metrics["tool_call_count"], 10)
+        self.assertEqual(metrics["tool_call_count"], 11)
         self.assertEqual(metrics["proposal_reaction_count"], 2)
         self.assertEqual(metrics["reaction_class_count"], 2)
+        self.assertEqual(metrics["scored_route_count"], 2)
+        self.assertEqual(metrics["solved_route_count"], 1)
+        self.assertEqual(metrics["best_route_score"], 0.95)
         self.assertEqual(metrics["evaluated_route_count"], 2)
         self.assertEqual(metrics["stock_hit_count"], 1)
         self.assertEqual(metrics["literature_hit_count"], 1)

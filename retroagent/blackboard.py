@@ -114,6 +114,12 @@ class SharedBlackboard:
                 for smi, src in result.get("in_stock", {}).items():
                     self.stock_hits[smi] = src
                     self.route_graph.mark_stock(smi, source=src)
+            case "score_routes":
+                self.routes = result.get("routes", [])
+                for route in self.routes:
+                    route_id = route.get("route_id") or route.get("id")
+                    if route_id is not None:
+                        self.scores[str(route_id)] = route.get("score", 0.0)
             case "analyze_chirality":
                 self.design_evaluations.append({"tool": "analyze_chirality", "result": result})
             case "classify_ligand":

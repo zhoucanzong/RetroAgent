@@ -168,6 +168,7 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
 8. ✅ 建立确定性 `chemical_critic` 工具，审查路线假设的证据、验证、库存、低分反应和实验计划缺口。
 9. ✅ 建立 `design_experiments` 工具，把 critic issues 转换成可执行的验证实验、对照、成功标准和失败诊断。
 10. ✅ 建立本地 `research_memory` 工具，记录/检索/总结 discovery 路线、critic、实验计划和结果标签。
+11. ✅ 建立 `score_routes` 工具，让 AND-OR RouteGraph 枚举并排序完整/部分路线。
 
 ### 2026-07-07 进展
 
@@ -219,7 +220,22 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
 - ToolGraph 已加入 `research_memory`，并从 `search_literature` 与 `build_research_report` 连接到记忆节点。
 - Benchmark trajectory analyzer 已统计 `memory_search_count` 与 `memory_record_count`，使 discovery benchmark 能观察 agent 是否复用和沉淀研究记忆。
 - 新增 `tests/test_research_memory.py`；扩展 schema、ToolGraph、discovery prompt、benchmark 测试覆盖 Research Memory 路径。
+- `RouteGraph` 已新增 `enumerate_routes()` 与 `scored_routes()`：从 target OR node 递归组合 reaction AND nodes，输出 solved/partial candidate routes，并按闭合程度、未解决前体、步数、反应类别多样性、收敛步骤和保护/脱保护负担评分。
+- 新增 `retroagent/tools/route_scorer.py`：`score_routes` 可从 target、proposal reaction records 和 stock hits 构建路线图，返回 `routes`、`route_graph` 和 solved/partial/best-score summary。
+- Discovery prompt 与 ToolGraph 已加入 `propose/evaluate/check_stock -> score_routes -> chemical_critic`，使 critic 和 final report 能基于整条路线排序，而不是孤立 reaction。
+- Benchmark trajectory analyzer 已统计 `scored_route_count`、`solved_route_count`、`best_route_score`，用于衡量 agent 是否真正进行了路线级比较。
+- 新增 `tests/test_route_scorer.py`；扩展 `tests/test_route_graph.py`、`tests/test_tool_graph.py`、`tests/test_discovery_mode.py`、`tests/test_benchmarks.py` 覆盖路线枚举/评分路径。
+- 人工复杂 discovery 测试目标：`COc1cc(C(=O)N[C@H](C)c2ccncc2)cc(S(=O)(=O)N2CCOCC2)c1OC(F)(F)F`。测试显示模型能提出 late-stage amide coupling、sulfonamide-first、late-stage OCF3 等路线想法，但会绕过 `score_routes / chemical_critic / design_experiments / build_research_report / research_memory`，说明 prompt-only 约束不足。
+- 修复真实运行暴露的模板 bug：system template 访问 `tool.examples` 前先判断 `is defined`，避免无 examples 的工具在 StrictUndefined 下导致 prompt 渲染失败。
+- 修复 auto-tune 预算问题：复杂分子不再把用户显式传入的低 `--max-steps` 放大到 150；`step_limit < 100` 时保持用户上限。
+- 新增 discovery workflow guard：当已有 proposal/evaluation 后，Planner 会动态提示下一步必须调用 `score_routes -> chemical_critic -> design_experiments -> build_research_report -> research_memory(record)`；如果 discovery 模式缺少这些关键工具却尝试 final submission，Planner 会阻止提交并要求补齐流程。
+- 第二轮人工复杂 discovery 测试显示：仅靠动态 guard 仍不够，模型会继续调用 `check_patent / recommend_conditions` 等旁路工具而不进入 `score_routes`。
+- 新增 discovery 执行层硬闸门：候选反应出现后，在完成 `score_routes -> chemical_critic -> design_experiments -> build_research_report -> research_memory(record)` 当前节点前，Planner 会阻止无关工具调用，并返回明确的 workflow blocked warning。
+- 新增 discovery 自动路线评分：`propose` 或 stock 更新填充候选反应后，Planner 会自动插入一次 `score_routes`，避免模型因为忽略提示而停留在孤立反应层面。
+- `SharedBlackboard` 已记录 `score_routes` 输出的 `routes` 与 route-level scores，使后续 critic/report/benchmark 能直接读取路线级排序。
+- 新增测试覆盖：自动 `score_routes` 插入、候选路线后阻止旁路工具、blackboard 记录 route score。当前 `unittest` 全量为 59 项通过。
 - 验证命令：
+  - `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`
   - `.venv/bin/python -m unittest discover -s tests -v`
   - `.venv/bin/python -m compileall retroagent tests`
   - `.venv/bin/python -m retroagent.run.retro run --help`

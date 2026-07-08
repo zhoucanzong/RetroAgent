@@ -17,6 +17,7 @@ class ToolGraphTests(unittest.TestCase):
             "disconnect",
             "propose",
             "evaluate",
+            "score_routes",
             "map_reaction",
             "chemical_critic",
             "design_experiments",
@@ -26,7 +27,8 @@ class ToolGraphTests(unittest.TestCase):
         ]
 
         self.assertEqual(next_tools("disconnect", available), ["propose", "think"])
-        self.assertEqual(next_tools("propose", available), ["evaluate", "map_reaction"])
+        self.assertEqual(next_tools("propose", available), ["evaluate", "score_routes", "map_reaction"])
+        self.assertIn("chemical_critic", next_tools("score_routes", available))
         self.assertIn("chemical_critic", next_tools("map_reaction", available))
         self.assertIn("design_experiments", next_tools("chemical_critic", available))
         self.assertIn("build_research_report", next_tools("design_experiments", available))
@@ -37,6 +39,7 @@ class ToolGraphTests(unittest.TestCase):
             "disconnect",
             "propose",
             "evaluate",
+            "score_routes",
             "chemical_critic",
             "design_experiments",
             "build_research_report",
@@ -44,6 +47,7 @@ class ToolGraphTests(unittest.TestCase):
         ])
 
         self.assertIn("`propose`", summary)
+        self.assertIn("`score_routes`", summary)
         self.assertIn("`chemical_critic`", summary)
         self.assertIn("`design_experiments`", summary)
         self.assertIn("`build_research_report`", summary)

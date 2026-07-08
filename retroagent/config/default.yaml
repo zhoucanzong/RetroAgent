@@ -48,7 +48,7 @@ agent:
     ### {{ tool.name }}
     {{ tool.description }}
     **Parameters**: {{ tool.parameters | tojson }}
-    {% if tool.examples %}
+    {% if tool.examples is defined and tool.examples %}
     **Examples**:
     {% for ex in tool.examples %}
     - Input: `{{ ex.input | tojson }}` → Output: `{{ ex.output | tojson }}`
@@ -104,15 +104,16 @@ agent:
     2. **THEN** use `disconnect` to identify strategic bond disconnections and model/template biases
     3. **EXPLORE DIVERSE BRANCHES** with `propose`: include high-confidence templates, lower-frequency alternatives, and fallback scans when model predictions do not match
     4. **EVALUATE** candidates with `evaluate`, `check_stock`, `search_literature`, `map_reaction`, and `recommend_conditions` where useful
-    5. **CLASSIFY EVIDENCE** for each route: `known`, `analog-supported`, `tool-supported`, or `speculative`
-    6. **PRESERVE DIVERSITY**: keep routes with different disconnections, reaction families, starting materials, protection strategies, or late-stage functionalization logic
-    7. **CRITIQUE RISKS**: flag stereochemistry, chemoselectivity, unstable intermediates, unrealistic conditions, safety/IP issues, and over-reliance on non-matching templates
-    8. **CRITICIZE BEFORE SUBMITTING** with `chemical_critic`: pass route hypotheses, proposed reactions, evaluation scores, stock hits, literature hits, mapping reports, condition reports, and the serialized route graph when available. Address critical/warning issues or explicitly mark them as unresolved experimental risks.
-    9. **DESIGN VALIDATION EXPERIMENTS** with `design_experiments`: convert critic issues into controls, success criteria, failure diagnostics, and decision points.
-    10. **STRUCTURE THE PORTFOLIO** with `build_research_report` before final submission. Every route hypothesis should include a claim, evidence, risk review, and next experiment.
-    11. **RECORD RESEARCH MEMORY** with `research_memory` using `operation="record"` after the report is structured, including hypotheses, critic report, experiment plan, route graph summary, outcome, tags, and notes.
-    12. **SUBMIT** a portfolio of route hypotheses, not a single overconfident answer. Separate literature-backed routes from analog-supported and speculative routes.
-    13. ⚠️ CRITICAL — Do not claim a speculative route is experimentally validated. State what evidence supports it and what experiment would test it next.
+    5. **SCORE WHOLE ROUTES** with `score_routes`: enumerate candidate routes from proposed reactions and stock hits, then compare closure, unresolved precursors, step count, diversity, and convergence
+    6. **CLASSIFY EVIDENCE** for each route: `known`, `analog-supported`, `tool-supported`, or `speculative`
+    7. **PRESERVE DIVERSITY**: keep routes with different disconnections, reaction families, starting materials, protection strategies, or late-stage functionalization logic
+    8. **CRITIQUE RISKS**: flag stereochemistry, chemoselectivity, unstable intermediates, unrealistic conditions, safety/IP issues, and over-reliance on non-matching templates
+    9. **CRITICIZE BEFORE SUBMITTING** with `chemical_critic`: pass route hypotheses, proposed reactions, scored routes, evaluation scores, stock hits, literature hits, mapping reports, condition reports, and the serialized route graph when available. Address critical/warning issues or explicitly mark them as unresolved experimental risks.
+    10. **DESIGN VALIDATION EXPERIMENTS** with `design_experiments`: convert critic issues into controls, success criteria, failure diagnostics, and decision points.
+    11. **STRUCTURE THE PORTFOLIO** with `build_research_report` before final submission. Every route hypothesis should include a claim, evidence, risk review, and next experiment.
+    12. **RECORD RESEARCH MEMORY** with `research_memory` using `operation="record"` after the report is structured, including hypotheses, critic report, experiment plan, route graph summary, outcome, tags, and notes.
+    13. **SUBMIT** a portfolio of route hypotheses, not a single overconfident answer. Separate literature-backed routes from analog-supported and speculative routes.
+    14. ⚠️ CRITICAL — Do not claim a speculative route is experimentally validated. State what evidence supports it and what experiment would test it next.
     {% else %}
     ## Ligand/Catalyst Design Strategy
     1. **FIRST** use `design_ligand` to generate candidate molecules matching the constraints

@@ -34,6 +34,7 @@ from retroagent.tools.chemical_critic import ChemicalCriticTool
 from retroagent.tools.experiment_designer import ExperimentDesignerTool
 from retroagent.tools.research_memory import ResearchMemoryTool
 from retroagent.tools.research_report import ResearchReportTool
+from retroagent.tools.route_scorer import RouteScorerTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -248,6 +249,7 @@ def _build_environment() -> RetroEnvironment:
     env.register("convert_identifier", IdentifierTool())    # name/IUPAC/CAS <-> SMILES (PubChem)
     env.register("molecule_properties", PropertiesTool())   # RDKit physicochemical descriptors
     env.register("map_reaction", ReactionMapperTool())      # rxnmapper atom-to-atom mapping
+    env.register("score_routes", RouteScorerTool())         # enumerate/score whole route graph
     env.register("chemical_critic", ChemicalCriticTool())   # deterministic route hypothesis audit
     env.register("design_experiments", ExperimentDesignerTool())  # critic issue -> validation plan
     env.register("build_research_report", ResearchReportTool())  # discovery hypothesis schema audit

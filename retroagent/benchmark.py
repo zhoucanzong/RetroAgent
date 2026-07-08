@@ -150,6 +150,9 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Extract benchmark metrics from a RetroPlanner trajectory."""
     tool_calls = []
     proposal_reactions = []
+    scored_route_count = 0
+    solved_route_count = 0
+    best_route_score = None
     evaluated_routes = 0
     stock_hits = 0
     literature_hits = 0
@@ -197,6 +200,13 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         if tool == "propose":
             proposal_reactions.extend(data.get("reactions", []))
+        elif tool == "score_routes":
+            scored_route_count += len(data.get("routes", []))
+            summary = data.get("summary", {}) or {}
+            solved_route_count += int(summary.get("solved_route_count", 0) or 0)
+            score = summary.get("best_score")
+            if isinstance(score, (int, float)):
+                best_route_score = score if best_route_score is None else max(best_route_score, score)
         elif tool == "evaluate":
             evaluated_routes += len(data.get("scores", {}))
         elif tool == "check_stock":
@@ -261,7 +271,8 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
         )
     )
     validation_tools_used = any(
-        tool in tool_calls for tool in ("evaluate", "check_stock", "recommend_conditions", "map_reaction")
+        tool in tool_calls
+        for tool in ("evaluate", "check_stock", "recommend_conditions", "map_reaction", "score_routes")
     )
 
     return {
@@ -273,6 +284,9 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
         "reaction_classes": reaction_classes[:20],
         "template_count": len(template_indices),
         "precursor_set_count": len(precursor_sets),
+        "scored_route_count": scored_route_count,
+        "solved_route_count": solved_route_count,
+        "best_route_score": best_route_score,
         "evaluated_route_count": evaluated_routes,
         "stock_hit_count": stock_hits,
         "literature_hit_count": literature_hits,
