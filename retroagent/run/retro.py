@@ -9,8 +9,17 @@ import typer
 
 from retroagent import package_dir, models_dir, get_config
 from retroagent.agents.planner import RetroPlanner
-from retroagent.benchmark import load_discovery_cases, run_discovery_cases, write_jsonl
+from retroagent.agents.discovery_controller import DiscoveryController
+from retroagent.benchmark import (
+    load_discovery_cases,
+    load_feedback_cases,
+    run_discovery_cases,
+    score_closed_loop_events,
+    write_jsonl,
+)
 from retroagent.blackboard import SharedBlackboard
+from retroagent.research_execution import PermissionGrant, PermissionMode
+from retroagent.research_state import ResearchLedger
 from retroagent.environments import RetroEnvironment
 from retroagent.tools.disconnect import DisconnectionTool
 from retroagent.tools.propose import ProposalTool
@@ -35,6 +44,7 @@ from retroagent.tools.experiment_designer import ExperimentDesignerTool
 from retroagent.tools.research_memory import ResearchMemoryTool
 from retroagent.tools.research_report import ResearchReportTool
 from retroagent.tools.route_scorer import RouteScorerTool
+from retroagent.tools.feedback_oracle import FeedbackOracleTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -258,6 +268,68 @@ def _build_environment() -> RetroEnvironment:
     return env
 
 
+def _build_agent_for_mode(
+    mode: str,
+    llm,
+    env,
+    cfg,
+    *,
+    max_steps: int,
+    output: Path | None,
+    run_workspace: Path,
+    ledger_output: Path | None,
+    permission_mode: str,
+    permission_scopes: str,
+):
+    if mode == "discovery":
+        try:
+            resolved_mode = PermissionMode(permission_mode)
+        except ValueError as exc:
+            raise ValueError("permission_mode must be restricted, standard, or full") from exc
+        scopes = {item.strip() for item in permission_scopes.split(",") if item.strip()}
+        if resolved_mode == PermissionMode.FULL and not scopes:
+            raise ValueError("full permission mode requires explicit permission_scopes")
+        return DiscoveryController(
+            llm,
+            env,
+            ledger=ResearchLedger(ledger_output),
+            workspace=run_workspace,
+            permission_grant=PermissionGrant(mode=resolved_mode, scopes=scopes),
+            max_cycles=max_steps,
+            max_estimated_minutes=max(1.0, cfg.agent_wall_time_limit_seconds / 60),
+            timeout=cfg.env_timeout,
+        )
+
+    return RetroPlanner(
+        llm, env, SharedBlackboard(),
+        system_template=cfg.agent_system_template,
+        instance_template=cfg.agent_instance_template,
+        step_limit=max_steps,
+        cost_limit=cfg.agent_cost_limit,
+        wall_time_limit_seconds=cfg.agent_wall_time_limit_seconds,
+        max_search_depth=cfg.agent_max_search_depth,
+        search_strategy=cfg.agent_search_strategy,
+        max_consecutive_format_errors=cfg.agent_max_consecutive_format_errors,
+        output_path=output,
+        enable_reflection=cfg.agent_enable_reflection,
+        enable_backtracking=cfg.agent_enable_backtracking,
+        backtrack_score_threshold=cfg.agent_backtrack_score_threshold,
+        backtrack_patience=cfg.agent_backtrack_patience,
+        enable_repeated_action_guard=cfg.agent_enable_repeated_action_guard,
+        max_repeated_actions=cfg.agent_max_repeated_actions,
+        enable_schema_validation=cfg.agent_enable_schema_validation,
+        enable_dead_loop_monitor=cfg.agent_enable_dead_loop_monitor,
+        cycling_window=cfg.agent_cycling_window,
+        stagnation_rounds=cfg.agent_stagnation_rounds,
+        semantic_repeat_threshold=cfg.agent_semantic_repeat_threshold,
+        enable_early_exit_hint=cfg.agent_enable_early_exit_hint,
+        early_exit_score_threshold=cfg.agent_early_exit_score_threshold,
+        enable_enhanced_observation=cfg.agent_enable_enhanced_observation,
+        enable_auto_tune=cfg.agent_enable_auto_tune,
+        enable_design_auditor=cfg.agent_enable_design_auditor,
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
@@ -271,6 +343,18 @@ def run(
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL (overrides config)"),
     output: Path | None = typer.Option(None, "-o", "--output", help="Save trajectory to file"),
     max_steps: int = typer.Option(100, "--max-steps", help="Maximum planning steps"),
+    permission_mode: str = typer.Option(
+        "standard", "--permission-mode", help="Discovery permissions: restricted | standard | full",
+    ),
+    permission_scopes: str = typer.Option(
+        "", "--permission-scopes", help="Comma-separated scopes for full discovery authorization",
+    ),
+    run_workspace: Path = typer.Option(
+        Path("logs/research_runs/current"), "--run-workspace", help="Workspace for discovery code and artifacts",
+    ),
+    ledger_output: Path | None = typer.Option(
+        None, "--ledger-output", help="Optional append-only discovery event ledger JSONL",
+    ),
 ) -> None:
     """Run LLM-driven planning or design on a target SMILES / constraints."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
@@ -300,40 +384,22 @@ def run(
         temperature=cfg.llm_temperature, max_tokens=cfg.llm_max_tokens,
         max_retries=cfg.llm_max_retries,
     )
-    blackboard = SharedBlackboard()
-
-    planner = RetroPlanner(
-        llm, env, blackboard,
-        system_template=cfg.agent_system_template,
-        instance_template=cfg.agent_instance_template,
-        step_limit=max_steps,
-        cost_limit=cfg.agent_cost_limit,
-        wall_time_limit_seconds=cfg.agent_wall_time_limit_seconds,
-        max_search_depth=cfg.agent_max_search_depth,
-        search_strategy=cfg.agent_search_strategy,
-        max_consecutive_format_errors=cfg.agent_max_consecutive_format_errors,
-        output_path=output,
-        enable_reflection=cfg.agent_enable_reflection,
-        enable_backtracking=cfg.agent_enable_backtracking,
-        backtrack_score_threshold=cfg.agent_backtrack_score_threshold,
-        backtrack_patience=cfg.agent_backtrack_patience,
-        enable_repeated_action_guard=cfg.agent_enable_repeated_action_guard,
-        max_repeated_actions=cfg.agent_max_repeated_actions,
-        enable_schema_validation=cfg.agent_enable_schema_validation,
-        # Dead-Loop Monitor (Phase 0)
-        enable_dead_loop_monitor=cfg.agent_enable_dead_loop_monitor,
-        cycling_window=cfg.agent_cycling_window,
-        stagnation_rounds=cfg.agent_stagnation_rounds,
-        semantic_repeat_threshold=cfg.agent_semantic_repeat_threshold,
-        enable_early_exit_hint=cfg.agent_enable_early_exit_hint,
-        early_exit_score_threshold=cfg.agent_early_exit_score_threshold,
-        # Enhanced Observation (Phase 2)
-        enable_enhanced_observation=cfg.agent_enable_enhanced_observation,
-        # Auto-tune (Phase 3)
-        enable_auto_tune=cfg.agent_enable_auto_tune,
-        # Design Auditor (Phase 0F)
-        enable_design_auditor=cfg.agent_enable_design_auditor,
-    )
+    try:
+        agent = _build_agent_for_mode(
+            mode,
+            llm,
+            env,
+            cfg,
+            max_steps=max_steps,
+            output=output,
+            run_workspace=run_workspace,
+            ledger_output=ledger_output,
+            permission_mode=permission_mode,
+            permission_scopes=permission_scopes,
+        )
+    except ValueError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(2) from exc
 
     print(f"\n{'='*60}")
     print(f"RetroAgent v0.1 — Mode: {mode}")
@@ -342,9 +408,15 @@ def run(
     print(f"Tools available: {[t['name'] for t in env.get_tools_spec()]}")
     print(f"{'='*60}\n")
 
-    result = planner.run(task=task, mode=mode)
+    if mode == "discovery":
+        result = agent.run(task)
+    else:
+        result = agent.run(task=task, mode=mode)
     print(f"\nResult: exit_status={result.get('exit_status')}")
 
+    if output and result.get("trajectory"):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result["trajectory"], indent=2, ensure_ascii=False))
     if output:
         print(f"Trajectory saved to {output}")
 
@@ -480,35 +552,25 @@ def benchmark_discovery(
             max_tokens=cfg.llm_max_tokens,
             max_retries=cfg.llm_max_retries,
         )
-        planner = RetroPlanner(
-            llm, env, SharedBlackboard(),
-            system_template=cfg.agent_system_template,
-            instance_template=cfg.agent_instance_template,
-            step_limit=max_steps,
-            cost_limit=cfg.agent_cost_limit,
-            wall_time_limit_seconds=cfg.agent_wall_time_limit_seconds,
-            max_search_depth=cfg.agent_max_search_depth,
-            search_strategy=cfg.agent_search_strategy,
-            max_consecutive_format_errors=cfg.agent_max_consecutive_format_errors,
-            output_path=trajectory_path,
-            enable_reflection=cfg.agent_enable_reflection,
-            enable_backtracking=cfg.agent_enable_backtracking,
-            backtrack_score_threshold=cfg.agent_backtrack_score_threshold,
-            backtrack_patience=cfg.agent_backtrack_patience,
-            enable_repeated_action_guard=cfg.agent_enable_repeated_action_guard,
-            max_repeated_actions=cfg.agent_max_repeated_actions,
-            enable_schema_validation=cfg.agent_enable_schema_validation,
-            enable_dead_loop_monitor=cfg.agent_enable_dead_loop_monitor,
-            cycling_window=cfg.agent_cycling_window,
-            stagnation_rounds=cfg.agent_stagnation_rounds,
-            semantic_repeat_threshold=cfg.agent_semantic_repeat_threshold,
-            enable_early_exit_hint=cfg.agent_enable_early_exit_hint,
-            early_exit_score_threshold=cfg.agent_early_exit_score_threshold,
-            enable_enhanced_observation=cfg.agent_enable_enhanced_observation,
-            enable_auto_tune=cfg.agent_enable_auto_tune,
-            enable_design_auditor=cfg.agent_enable_design_auditor,
+        agent = _build_agent_for_mode(
+            "discovery",
+            llm,
+            env,
+            cfg,
+            max_steps=max_steps,
+            output=trajectory_path,
+            run_workspace=trajectory_path.parent / f"{case.id}.workspace",
+            ledger_output=None,
+            permission_mode="standard",
+            permission_scopes="",
         )
-        return planner.run(task=case.task_prompt(), mode="discovery")
+        raw = agent.run(case.task_prompt())
+        trajectory_path.write_text(
+            json.dumps(raw.get("trajectory", []), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        raw["submission"] = raw.get("conclusion", raw.get("submission", ""))
+        return raw
 
     results = run_discovery_cases(
         loaded_cases,
@@ -524,6 +586,103 @@ def benchmark_discovery(
     print(f"Mode: {'dry-run' if dry_run else 'run'}")
     print(f"Rubric passed: {passed}/{len(results)}")
     print(f"Shape checks passed: {shape_passed}/{len(results)}")
+    print(f"Results saved to: {result_path}")
+
+
+@app.command("benchmark-discovery-feedback")
+def benchmark_discovery_feedback(
+    cases: Path = typer.Option(
+        Path("benchmarks/discovery_feedback.jsonl"),
+        "--cases",
+        help="Failure-feedback discovery benchmark JSONL file",
+    ),
+    output_dir: Path = typer.Option(
+        Path("logs/discovery_feedback_benchmark"),
+        "--output-dir",
+        help="Directory for event trajectories and results",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--run",
+        help="Validate cases without calling the LLM unless --run is used",
+    ),
+    model: str | None = typer.Option(None, "-m", "--model"),
+    api_key: str | None = typer.Option(None, "--api-key"),
+    base_url: str | None = typer.Option(None, "--base-url"),
+    max_cycles: int = typer.Option(12, "--max-cycles"),
+) -> None:
+    """Evaluate whether discovery mode replans after explicit route failure."""
+    loaded_cases = load_feedback_cases(cases)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cfg = get_config()
+    rows = []
+
+    if dry_run:
+        for case in loaded_cases:
+            rows.append({
+                "case_id": case.id,
+                "target_name": case.target_name,
+                "exit_status": "DryRun",
+                "metrics": {
+                    "initial_route_count": len(case.initial_routes),
+                    "feedback_reaction_count": len(case.feedback.get("reaction_ids", [])),
+                    "success_criteria_count": len(case.success_criteria),
+                },
+            })
+    else:
+        llm_api_key = api_key or cfg.llm_api_key
+        if not llm_api_key:
+            raise typer.BadParameter("No API key set. Use --dry-run, --api-key, or LLM_API_KEY.")
+        llm = LLMClient(
+            model=model or cfg.llm_model,
+            api_key=llm_api_key,
+            base_url=base_url or cfg.llm_base_url,
+            temperature=cfg.llm_temperature,
+            max_tokens=cfg.llm_max_tokens,
+            max_retries=cfg.llm_max_retries,
+        )
+        for case in loaded_cases:
+            env = _build_environment()
+            env.register("feedback_oracle", FeedbackOracleTool(case.feedback))
+            ledger = ResearchLedger()
+            ledger.append("goal_set", {
+                "task": case.task_prompt(),
+                "target_smiles": case.target_smiles,
+                "stopping_criteria": case.success_criteria,
+            }, actor="benchmark", cycle=0)
+            for route in case.initial_routes:
+                ledger.append("route_registered", route, actor="benchmark", cycle=0)
+            controller = DiscoveryController(
+                llm,
+                env,
+                ledger=ledger,
+                workspace=output_dir / case.id / "workspace",
+                permission_grant=PermissionGrant(mode=PermissionMode.STANDARD),
+                max_cycles=max_cycles,
+                timeout=cfg.env_timeout,
+            )
+            result = controller.run(case.task_prompt())
+            trajectory_path = output_dir / f"{case.id}.events.json"
+            trajectory_path.write_text(
+                json.dumps(result["trajectory"], indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            rows.append({
+                "case_id": case.id,
+                "target_name": case.target_name,
+                "exit_status": result["exit_status"],
+                "conclusion": result.get("conclusion", ""),
+                "trajectory_path": str(trajectory_path),
+                "metrics": score_closed_loop_events(result["trajectory"]),
+            })
+
+    result_path = output_dir / "results.jsonl"
+    write_jsonl(result_path, rows)
+    passed = sum(1 for row in rows if row.get("metrics", {}).get("closed_loop_pass"))
+    print(f"Feedback benchmark cases: {len(rows)}")
+    print(f"Mode: {'dry-run' if dry_run else 'run'}")
+    if not dry_run:
+        print(f"Closed-loop passed: {passed}/{len(rows)}")
     print(f"Results saved to: {result_path}")
 
 

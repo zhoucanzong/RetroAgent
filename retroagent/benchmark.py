@@ -12,6 +12,60 @@ from rdkit import Chem
 
 
 @dataclass
+class DiscoveryFeedbackCase:
+    id: str
+    target_name: str
+    target_smiles: str
+    objective: str
+    initial_routes: list[dict[str, Any]]
+    feedback: dict[str, Any]
+    success_criteria: list[str]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DiscoveryFeedbackCase":
+        case = cls(
+            id=str(data["id"]),
+            target_name=str(data["target_name"]),
+            target_smiles=str(data["target_smiles"]),
+            objective=str(data["objective"]),
+            initial_routes=list(data["initial_routes"]),
+            feedback=dict(data["feedback"]),
+            success_criteria=list(data["success_criteria"]),
+        )
+        if Chem.MolFromSmiles(case.target_smiles) is None:
+            raise ValueError(f"{case.id}: invalid target_smiles")
+        if len(case.initial_routes) < 2:
+            raise ValueError(f"{case.id}: at least two initial routes are required")
+        route_ids = {str(route.get("id", "")) for route in case.initial_routes}
+        if "" in route_ids or len(route_ids) != len(case.initial_routes):
+            raise ValueError(f"{case.id}: initial route ids must be unique and non-empty")
+        if "route_a" not in route_ids:
+            raise ValueError(f"{case.id}: route_a is required as the preferred route")
+        route_a = next(route for route in case.initial_routes if route.get("id") == "route_a")
+        route_a_feasibility = float((route_a.get("scores", {}) or {}).get("feasibility", 0.0))
+        if any(
+            float((route.get("scores", {}) or {}).get("feasibility", 0.0)) > route_a_feasibility
+            for route in case.initial_routes if route.get("id") != "route_a"
+        ):
+            raise ValueError(f"{case.id}: route_a must be the highest-feasibility initial route")
+        if not case.feedback.get("reaction_ids"):
+            raise ValueError(f"{case.id}: feedback reaction_ids are required")
+        route_a_reactions = {str(item) for item in route_a.get("reaction_ids", [])}
+        feedback_reactions = {str(item) for item in case.feedback["reaction_ids"]}
+        if not feedback_reactions.issubset(route_a_reactions):
+            raise ValueError(f"{case.id}: feedback reactions must belong to route_a")
+        return case
+
+    def task_prompt(self) -> str:
+        return (
+            f"Target: {self.target_smiles}\n"
+            f"Objective: {self.objective}\n"
+            "Use the registered feedback_oracle to obtain the withheld computational result. "
+            "Then update route beliefs and choose a materially different route if required."
+        )
+
+
+@dataclass
 class DiscoveryBenchmarkCase:
     id: str
     task_type: str
@@ -85,6 +139,18 @@ def load_discovery_cases(path: Path) -> list[DiscoveryBenchmarkCase]:
             cases.append(DiscoveryBenchmarkCase.from_dict(data))
         except Exception as exc:
             raise ValueError(f"Invalid discovery benchmark case at {path}:{line_no}: {exc}") from exc
+    return cases
+
+
+def load_feedback_cases(path: Path) -> list[DiscoveryFeedbackCase]:
+    cases = []
+    for line_no, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            cases.append(DiscoveryFeedbackCase.from_dict(json.loads(line)))
+        except Exception as exc:
+            raise ValueError(f"Invalid feedback benchmark case at {path}:{line_no}: {exc}") from exc
     return cases
 
 
@@ -317,7 +383,232 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
 def analyze_trajectory_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"trajectory_missing": True}
-    return analyze_trajectory(json.loads(path.read_text()))
+    rows = json.loads(path.read_text())
+    if rows and isinstance(rows[0], dict) and "type" in rows[0] and "payload" in rows[0]:
+        return analyze_research_events(rows)
+    return analyze_trajectory(rows)
+
+
+def analyze_research_events(events: list[Any]) -> dict[str, Any]:
+    rows = [_event_dict(event) for event in events]
+    decisions = [row for row in rows if row.get("type") == "decision_made"]
+    executions = [row for row in rows if row.get("type") == "execution_started"]
+    tool_sequence = []
+    for row in executions:
+        action = row.get("payload", {}).get("action", {})
+        tool_sequence.append(str(action.get("tool") or action.get("command") or "python"))
+    proposal_reactions = []
+    scored_route_count = 0
+    solved_route_count = 0
+    best_route_score = None
+    evaluated_route_count = 0
+    stock_hit_count = 0
+    literature_hit_count = 0
+    structured_report_count = 0
+    critic_report_count = 0
+    experiment_plan_count = 0
+    memory_record_count = 0
+    memory_search_count = 0
+    for row in rows:
+        if row.get("type") != "execution_finished":
+            continue
+        payload = row.get("payload", {})
+        action = payload.get("action", {})
+        tool = str(action.get("tool", ""))
+        data = _event_result_data(payload.get("result", {}))
+        if tool == "propose":
+            proposal_reactions.extend(data.get("reactions", []))
+        elif tool == "score_routes":
+            scored_route_count += len(data.get("routes", []))
+            summary = data.get("summary", {}) or {}
+            solved_route_count += int(summary.get("solved_route_count", 0) or 0)
+            score = summary.get("best_score")
+            if isinstance(score, (int, float)):
+                best_route_score = score if best_route_score is None else max(best_route_score, score)
+        elif tool == "evaluate":
+            evaluated_route_count += len(data.get("scores", {}))
+        elif tool == "check_stock":
+            stock_hit_count += len(data.get("in_stock", {}))
+        elif tool in {"search_literature", "web_search"}:
+            literature_hit_count += len(data.get("known_routes", data.get("results", [])))
+        elif tool == "build_research_report":
+            structured_report_count += 1
+        elif tool == "chemical_critic":
+            critic_report_count += 1
+        elif tool == "design_experiments":
+            experiment_plan_count += 1
+        elif tool == "research_memory":
+            if data.get("status") == "recorded":
+                memory_record_count += 1
+            else:
+                memory_search_count += 1
+    reaction_classes = {
+        str(item.get("classification", "")) for item in proposal_reactions if item.get("classification")
+    }
+    template_indices = {
+        item.get("template_index") for item in proposal_reactions if item.get("template_index") is not None
+    }
+    precursor_sets = {
+        tuple(sorted(item.get("precursor_smiles_list") or item.get("precursors") or []))
+        for item in proposal_reactions
+    }
+    precursor_sets.discard(())
+    evidence_tools = {"search_literature", "web_search", "fetch_url"}
+    risk_tools = {
+        "check_patent", "functional_groups", "molecule_properties", "map_reaction",
+        "chemical_critic", "design_experiments", "build_research_report", "research_memory",
+    }
+    validation_tools = {"evaluate", "check_stock", "recommend_conditions", "map_reaction", "score_routes"}
+    closed_loop = score_closed_loop_events(rows)
+    return {
+        "event_count": len(rows),
+        "decision_count": len(decisions),
+        "execution_count": len(executions),
+        "tool_call_count": len(tool_sequence),
+        "tool_sequence": tool_sequence,
+        "unique_tools": sorted(set(tool_sequence)),
+        "proposal_reaction_count": len(proposal_reactions),
+        "reaction_class_count": len(reaction_classes),
+        "template_count": len(template_indices),
+        "precursor_set_count": len(precursor_sets),
+        "scored_route_count": scored_route_count,
+        "solved_route_count": solved_route_count,
+        "best_route_score": best_route_score,
+        "evaluated_route_count": evaluated_route_count,
+        "stock_hit_count": stock_hit_count,
+        "literature_hit_count": literature_hit_count,
+        "structured_report_count": structured_report_count,
+        "critic_report_count": critic_report_count,
+        "experiment_plan_count": experiment_plan_count,
+        "memory_record_count": memory_record_count,
+        "memory_search_count": memory_search_count,
+        "used_evidence_tools": bool(set(tool_sequence).intersection(evidence_tools)),
+        "used_risk_tools": bool(set(tool_sequence).intersection(risk_tools)),
+        "used_validation_tools": bool(set(tool_sequence).intersection(validation_tools)),
+        "reviewer_messages": 0,
+        "warning_messages": sum(1 for row in rows if row.get("type") == "decision_rejected"),
+        **closed_loop,
+    }
+
+
+def score_closed_loop_events(events: list[Any]) -> dict[str, bool]:
+    rows = [_event_dict(event) for event in events]
+    opposed_evidence = {
+        str(row.get("payload", {}).get("id")): {
+            str(item) for item in row.get("payload", {}).get("target_ids", [])
+        }
+        for row in rows
+        if row.get("type") == "evidence_added"
+        and row.get("payload", {}).get("direction") == "opposes"
+    }
+    failed_reactions = {
+        str(row.get("payload", {}).get("id"))
+        for row in rows
+        if row.get("type") == "reaction_status_changed"
+        and row.get("payload", {}).get("status") == "failed"
+    }
+    failed_routes = {
+        str(row.get("payload", {}).get("id"))
+        for row in rows
+        if row.get("type") == "route_status_changed"
+        and row.get("payload", {}).get("status") == "failed"
+    }
+    replan_index = next(
+        (index for index, row in enumerate(rows) if row.get("type") == "replan_required"),
+        None,
+    )
+    affected_routes: set[str] = set()
+    if replan_index is not None:
+        affected_routes = {
+            str(item) for item in rows[replan_index].get("payload", {}).get("affected_route_ids", [])
+        }
+    distinct_replan = False
+    if replan_index is not None:
+        for row in rows[replan_index + 1:]:
+            if row.get("type") != "decision_made":
+                continue
+            targets = {str(item) for item in row.get("payload", {}).get("target_ids", [])}
+            if targets and targets.isdisjoint(affected_routes):
+                distinct_replan = True
+                break
+
+    all_evidence = {
+        str(row.get("payload", {}).get("id"))
+        for row in rows if row.get("type") == "evidence_added"
+    }
+    completions = [row for row in rows if row.get("type") == "research_completed"]
+    final_target_sets = [
+        {str(item) for item in row.get("payload", {}).get("target_ids", [])}
+        for row in completions
+    ]
+    final_avoids_failed = any(
+        bool(targets) and targets.isdisjoint(failed_routes)
+        for targets in final_target_sets
+    )
+    evidence_cited = any(
+        bool(payload_ids)
+        and payload_ids.issubset(all_evidence)
+        for payload_ids in (
+            {str(item) for item in row.get("payload", {}).get("evidence_ids", [])}
+            for row in completions
+        )
+    )
+    failed_action_indices: dict[str, int] = {}
+    failure_evidence_ids: set[str] = set()
+    for index, row in enumerate(rows):
+        if row.get("type") != "action_failed":
+            continue
+        payload = row.get("payload", {})
+        fingerprint = str(payload.get("fingerprint", ""))
+        if fingerprint:
+            failed_action_indices.setdefault(fingerprint, index)
+        evidence_id = str(payload.get("evidence_id", ""))
+        if evidence_id:
+            failure_evidence_ids.add(evidence_id)
+    failed_action_not_repeated = not any(
+        row.get("type") == "execution_started"
+        and str(row.get("payload", {}).get("fingerprint", "")) in failed_action_indices
+        and index > failed_action_indices[str(row.get("payload", {}).get("fingerprint", ""))]
+        for index, row in enumerate(rows)
+    )
+    failure_evidence_cited = any(
+        bool({str(item) for item in row.get("payload", {}).get("evidence_ids", [])}.intersection(failure_evidence_ids))
+        for row in completions
+    )
+    metrics = {
+        "failure_recorded": any(
+            bool(target_ids.intersection(failed_reactions))
+            for target_ids in opposed_evidence.values()
+        ),
+        "failed_route_abandoned": bool(failed_routes) and final_avoids_failed,
+        "distinct_replan": distinct_replan and final_avoids_failed,
+        "evidence_cited": evidence_cited,
+        "failed_action_not_repeated": failed_action_not_repeated,
+        "failure_evidence_cited": failure_evidence_cited,
+    }
+    metrics["closed_loop_pass"] = all(metrics.values())
+    return metrics
+
+
+def _event_dict(event: Any) -> dict[str, Any]:
+    if isinstance(event, dict):
+        return event
+    if hasattr(event, "to_dict"):
+        return event.to_dict()
+    raise TypeError(f"Unsupported research event: {type(event).__name__}")
+
+
+def _event_result_data(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    output = result.get("output")
+    if isinstance(output, str):
+        try:
+            parsed = json.loads(output)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return output if isinstance(output, dict) else {}
 
 
 def score_discovery_rubric(metrics: dict[str, Any], case: DiscoveryBenchmarkCase) -> dict[str, Any]:
@@ -344,6 +635,7 @@ def score_discovery_rubric(metrics: dict[str, Any], case: DiscoveryBenchmarkCase
         and (
             trajectory.get("evaluated_route_count", 0) > 0
             or trajectory.get("stock_hit_count", 0) > 0
+            or trajectory.get("scored_route_count", 0) > 0
         )
     )
     risk_review_pass = (

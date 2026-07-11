@@ -41,3 +41,32 @@ Each non-dry-run result includes:
 - `rubric.risk_review_pass`
 - `rubric.next_experiment_pass`
 - `rubric.overall_pass`
+
+## discovery_feedback.jsonl
+
+Failure-driven replanning benchmark for `DiscoveryController v2`. Each case
+starts with competing route beliefs and exposes a withheld deterministic
+computational failure through `feedback_oracle`.
+
+Dry-run validates the case without an LLM call:
+
+```bash
+.venv/bin/python -m retroagent.run.retro benchmark-discovery-feedback --dry-run
+```
+
+Run the autonomous loop against the configured LLM:
+
+```bash
+.venv/bin/python -m retroagent.run.retro benchmark-discovery-feedback --run
+```
+
+The benchmark passes only when all event-level checks pass:
+
+- `failure_recorded`
+- `failed_route_abandoned`
+- `distinct_replan`
+- `evidence_cited`
+- `failed_action_not_repeated`
+- `failure_evidence_cited`
+
+`closed_loop_pass` is the conjunction of all six checks.

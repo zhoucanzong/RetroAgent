@@ -241,3 +241,31 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
   - `.venv/bin/python -m retroagent.run.retro run --help`
   - `.venv/bin/python -m retroagent.run.retro benchmark-discovery --dry-run --limit 2 --output-dir /tmp/retroagent_discovery_bench_test`
   - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro test-tools "CC(=O)Oc1ccccc1C(=O)O"`
+
+### 2026-07-11 DiscoveryController v2
+
+- 新增 `retroagent/research_state.py`：使用 append-only `ResearchLedger` 保存研究事件，并可重放为 `ResearchState`。状态包含目标、子目标、竞争假设、路线生命周期、反应状态、证据、决策、执行记录、审批记录和失败动作指纹。
+- 新增 `retroagent/research_feedback.py`：计算反馈可绑定具体 reaction/route；不可修复失败会将所有受影响路线标为 `failed`，可修复失败标为 `challenged` 并降低 feasibility/evidence strength、提高 uncertainty。
+- 新增 `retroagent/agents/discovery_controller.py`：discovery 模式不再执行固定 `score_routes -> critic -> experiments -> report` 硬流水线，而执行 `OBSERVE -> DECIDE -> AUTHORIZE -> EXECUTE -> ASSIMILATE -> REPLAN`。Agent 每轮只提交一个带研究问题、理由、预期观测和证伪条件的结构化决策。
+- Agent 可使用 `state` 动作显式提出 hypothesis 或设置 subgoal；这些动作只组织研究，不伪装成证据。工具、Python、系统命令和反馈结果才会产生 Evidence。
+- Agent 可自主编写并执行临时 Python，或在 run workspace 中执行系统命令。每次执行记录代码/命令、cwd、stdout、stderr、返回码、超时和产物路径。
+- 新增 `restricted / standard / full` 权限模式：在真正的 OS sandbox 接入前，standard 对所有临时 Python、系统命令、`bash` tool、联网、memory 写入、安装、项目写入、破坏性和特权操作请求审批；full 仅在用户显式提供非空 scope 时跳过逐项审批，空 scope 不再自动升级成 `*`。
+- 当前执行隔离是路径与策略 guardrail，不是操作系统级安全沙箱；`code_execution` 表示任意 Python 能力，`system` 表示任意 shell 能力，两者都可能产生传递性的文件/网络效果，不伪装成细粒度隔离。不要把 full 模式交给不可信模型。
+- 失败的工具/代码执行会生成 `action_failed + replan_required`，相同 action fingerprint 的原样重试会在执行前被拒绝；agent 必须改变参数、证据依据或研究分支。
+- 重试所声明的 `new_evidence_ids` 必须在该动作失败之后产生并与当前 target 相关；旧证据、无关证据或单独的 `changed_basis=true` 不能绕过重复保护。
+- 普通 route/reaction 注册事件不能把 `failed / superseded / completed` 终态恢复成 active；只有显式状态变更事件才能改变终态。
+- Agent observation 会压缩大型工具结果，只保留 evidence 摘要、结果键和大小；完整原始结果仍保存在 append-only ledger 中。
+- `score_routes` 的现有 `id/route_id` 输出和 `propose` reaction 输出已适配到 v2 研究状态；普通 retrosynthesis/design 仍由 `RetroPlanner` 执行。
+- CLI `run --mode discovery` 已切换到 v2，并新增 `--permission-mode`、`--permission-scopes`、`--run-workspace`、`--ledger-output`。`benchmark-discovery --run` 也使用 v2 事件轨迹。
+- 新增 `benchmarks/discovery_feedback.jsonl`、确定性 `FeedbackOracleTool` 和 `benchmark-discovery-feedback`。闭环通过要求同时满足 `failure_recorded / failed_route_abandoned / distinct_replan / evidence_cited / failed_action_not_repeated / failure_evidence_cited`。
+- Feedback benchmark 校验 route ID 唯一、route A 初始 feasibility 最高、feedback reaction 属于 route A，且 oracle 只响应 route A；最终重新选择失败路线会导致 benchmark 失败。v2 event analyzer 已补齐旧 rubric 所需的 proposal/score/evidence/risk/validation 指标。
+- Controller 已捕获 tool adapter 异常、非 dict 返回和 malformed state event，将其转为失败 Evidence 后继续 replan；fenced JSON 决策也可解析。
+- `estimated_cost.time_minutes` 已进入确定性预算：ResearchState 累计已用预算，超出 `max_estimated_minutes` 的动作会在执行前拒绝；CLI 默认以配置的 wall-time 分钟值作为 estimated-time 上限。
+- ResearchLedger 内部事件与外部 payload 深拷贝隔离；重复 evidence ID、语义缺字段等 replay 损坏会报告 event index 和最后有效 index。Evidence/Event ID 都支持非连续恢复，不会按数量覆盖旧记录。
+- 最终独立 code review 在多轮反例修复后未发现残留 P0/P1；全量 `unittest` 为 116 项通过。
+- 正式设计与逐文件实施计划位于 `docs/superpowers/specs/2026-07-11-discovery-controller-v2-design.md` 和 `docs/superpowers/plans/2026-07-11-discovery-controller-v2.md`。
+- 验证命令：
+  - `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`
+  - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
+  - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro run --help`
+  - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro benchmark-discovery-feedback --dry-run --output-dir /tmp/retroagent_feedback_bench_test`
