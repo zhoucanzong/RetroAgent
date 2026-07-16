@@ -19,6 +19,7 @@ class RetroEnvConfig(BaseModel):
     timeout: int = 120
     cwd: str = ""
     env: dict[str, str] = {}
+    include_bash: bool = True
 
 
 class RetroEnvironment:
@@ -41,6 +42,12 @@ class RetroEnvironment:
 
         # bash is handled specially — subprocess.run
         if tool_name == "bash":
+            if not self.config.include_bash:
+                return {
+                    "output": json.dumps({"error": "Unknown tool: bash"}),
+                    "returncode": -1,
+                    "exception_info": "Unknown tool: bash",
+                }
             return self._execute_bash(parameters)
 
         tool = self._tools.get(tool_name)
@@ -78,18 +85,18 @@ class RetroEnvironment:
             if examples:
                 spec["examples"] = examples
             specs.append(spec)
-        # Always include bash
-        specs.append({
-            "name": "bash",
-            "description": "Execute arbitrary shell commands (RDKit validation, file ops, etc.)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"}
+        if self.config.include_bash:
+            specs.append({
+                "name": "bash",
+                "description": "Execute arbitrary shell commands (RDKit validation, file ops, etc.)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Shell command to execute"}
+                    },
+                    "required": ["command"],
                 },
-                "required": ["command"],
-            },
-        })
+            })
         return specs
 
     def get_tool_graph_summary(self) -> str:

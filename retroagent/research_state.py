@@ -51,6 +51,7 @@ class ResearchState:
     evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
     evidence_event_index: dict[str, int] = field(default_factory=dict)
     decisions: list[dict[str, Any]] = field(default_factory=list)
+    rejections: list[dict[str, Any]] = field(default_factory=list)
     subgoals: list[dict[str, Any]] = field(default_factory=list)
     executions: list[dict[str, Any]] = field(default_factory=list)
     approvals: list[dict[str, Any]] = field(default_factory=list)
@@ -107,6 +108,14 @@ class ResearchState:
             self.evidence_event_index[evidence_id] = self.event_count
         elif event_type == "decision_made":
             self.decisions.append(payload)
+        elif event_type == "decision_rejected":
+            rejection = {"cycle": event.cycle, "reason": str(payload.get("reason", ""))}
+            action = payload.get("action")
+            if action is None and isinstance(payload.get("decision"), dict):
+                action = payload["decision"].get("action")
+            if action is not None:
+                rejection["action"] = action
+            self.rejections.append(rejection)
         elif event_type == "subgoal_set":
             self.subgoals.append(payload)
         elif event_type in ("execution_started", "execution_finished"):
@@ -151,6 +160,7 @@ class ResearchState:
             "reaction_count": len(reactions),
             "recent_evidence": [_compact_evidence(item) for item in list(self.evidence.values())[-20:]],
             "recent_decisions": self.decisions[-10:],
+            "recent_rejections": self.rejections[-5:],
             "subgoals": list(self.subgoals[-10:]),
             "recent_approvals": list(self.approvals[-10:]),
             "failed_action_fingerprints": sorted(self.failed_action_fingerprints),

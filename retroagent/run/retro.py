@@ -11,9 +11,11 @@ from retroagent import package_dir, models_dir, get_config
 from retroagent.agents.planner import RetroPlanner
 from retroagent.agents.discovery_controller import DiscoveryController
 from retroagent.benchmark import (
+    load_blind_cases,
     load_discovery_cases,
     load_feedback_cases,
     run_discovery_cases,
+    score_blind_conclusion,
     score_closed_loop_events,
     write_jsonl,
 )
@@ -45,6 +47,7 @@ from retroagent.tools.research_memory import ResearchMemoryTool
 from retroagent.tools.research_report import ResearchReportTool
 from retroagent.tools.route_scorer import RouteScorerTool
 from retroagent.tools.feedback_oracle import FeedbackOracleTool
+from retroagent.tools.blind_study_oracle import BlindStudyOracleTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -265,6 +268,16 @@ def _build_environment() -> RetroEnvironment:
     env.register("build_research_report", ResearchReportTool())  # discovery hypothesis schema audit
     env.register("research_memory", ResearchMemoryTool())   # local JSONL discovery memory
 
+    return env
+
+
+def _build_blind_environment(case) -> RetroEnvironment:
+    """Build an allowlisted offline environment that cannot read the answer file."""
+    env = RetroEnvironment(include_bash=False)
+    env.register("think", ThinkTool())
+    env.register("functional_groups", FunctionalGroupsTool())
+    env.register("molecule_properties", PropertiesTool())
+    env.register("blind_study_oracle", BlindStudyOracleTool(case.experiments))
     return env
 
 
@@ -683,6 +696,115 @@ def benchmark_discovery_feedback(
     print(f"Mode: {'dry-run' if dry_run else 'run'}")
     if not dry_run:
         print(f"Closed-loop passed: {passed}/{len(rows)}")
+    print(f"Results saved to: {result_path}")
+
+
+@app.command("benchmark-discovery-blind")
+def benchmark_discovery_blind(
+    cases: Path = typer.Option(
+        Path("benchmarks/blind_studies.jsonl"),
+        "--cases",
+        help="Recent-study blind benchmark JSONL file",
+    ),
+    output_dir: Path = typer.Option(
+        Path("logs/discovery_blind_benchmark"),
+        "--output-dir",
+        help="Directory for blind trajectories and results",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--run",
+        help="Validate withheld cases without calling the LLM unless --run is used",
+    ),
+    model: str | None = typer.Option(None, "-m", "--model"),
+    api_key: str | None = typer.Option(None, "--api-key"),
+    base_url: str | None = typer.Option(None, "--base-url"),
+    max_cycles: int = typer.Option(16, "--max-cycles"),
+) -> None:
+    """Test whether discovery mode reaches a recent paper result from hidden measurements."""
+    loaded_cases = load_blind_cases(cases)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cfg = get_config()
+    rows = []
+
+    if dry_run:
+        for case in loaded_cases:
+            rows.append({
+                "case_id": case.id,
+                "published_date": case.published_date,
+                "exit_status": "DryRun",
+                "metrics": {
+                    "registered_experiment_count": len(case.experiments),
+                    "minimum_experiment_count": case.min_experiments,
+                    "success_criteria_count": len(case.success_criteria),
+                },
+            })
+    else:
+        llm_api_key = api_key or cfg.llm_api_key
+        if not llm_api_key:
+            raise typer.BadParameter("No API key set. Use --dry-run, --api-key, or LLM_API_KEY.")
+        llm = LLMClient(
+            model=model or cfg.llm_model,
+            api_key=llm_api_key,
+            base_url=base_url or cfg.llm_base_url,
+            temperature=cfg.llm_temperature,
+            max_tokens=cfg.llm_max_tokens,
+            max_retries=cfg.llm_max_retries,
+        )
+        for case in loaded_cases:
+            env = _build_blind_environment(case)
+            ledger = ResearchLedger()
+            prompt = case.task_prompt()
+            ledger.append("goal_set", {"task": prompt}, actor="benchmark", cycle=0)
+            controller = DiscoveryController(
+                llm,
+                env,
+                ledger=ledger,
+                workspace=output_dir / case.id / "workspace",
+                permission_grant=PermissionGrant(mode=PermissionMode.RESTRICTED),
+                max_cycles=max_cycles,
+                timeout=cfg.env_timeout,
+                allow_execution_tools=False,
+            )
+            result = controller.run(prompt)
+            queried_experiment_ids = []
+            for event in result["trajectory"]:
+                if event.get("type") != "execution_started":
+                    continue
+                action = (event.get("payload", {}) or {}).get("action", {}) or {}
+                if action.get("tool") == "blind_study_oracle":
+                    experiment_id = (action.get("parameters", {}) or {}).get("experiment_id")
+                    if experiment_id:
+                        queried_experiment_ids.append(str(experiment_id))
+            conclusion = str(result.get("conclusion", ""))
+            metrics = score_blind_conclusion(
+                conclusion,
+                case,
+                queried_experiment_ids=queried_experiment_ids,
+            )
+            trajectory_path = output_dir / f"{case.id}.events.json"
+            trajectory_path.write_text(
+                json.dumps(result["trajectory"], indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            rows.append({
+                "case_id": case.id,
+                "published_date": case.published_date,
+                "source_title": case.source_title,
+                "source_url": case.source_url,
+                "exit_status": result["exit_status"],
+                "conclusion": conclusion,
+                "trajectory_path": str(trajectory_path),
+                "metrics": metrics,
+            })
+
+    result_path = output_dir / "results.jsonl"
+    write_jsonl(result_path, rows)
+    passed = sum(1 for row in rows if row.get("metrics", {}).get("blind_pass"))
+    print(f"Blind benchmark cases: {len(rows)}")
+    print(f"Mode: {'dry-run' if dry_run else 'run'}")
+    if not dry_run:
+        print(f"Blind passed: {passed}/{len(rows)}")
     print(f"Results saved to: {result_path}")
 
 

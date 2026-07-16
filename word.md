@@ -269,3 +269,23 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
   - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
   - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro run --help`
   - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro benchmark-discovery-feedback --dry-run --output-dir /tmp/retroagent_feedback_bench_test`
+
+### 2026-07-16 最新论文严格盲测
+
+- 选择 2026-07-15 在线发表的 Nature 论文 `Selectivity Emerges from Indiscriminate Photoreduction`（DOI: `10.1038/s41586-026-10897-7`）作为训练截止后盲题。
+- 冻结输入为 styrene 与 `1-(2,2-dimethylcyclopropyl)propan-1-one` 的 perylene electrophotocatalysis 条件，只告诉 Agent styrene 更易还原约 0.30 V；论文标题、URL、标准产物和评分规则不进入 Agent prompt。
+- 基线纯推理运行错误选择 H1（styrene reduction），暴露出 Agent 把初始还原电位排序直接等同于最终产物选择性，且没有主动取得区分 forward SET 与 post-SET branching 的证据。
+- 新增 `benchmarks/blind_studies.jsonl`、`BlindStudyOracleTool` 和 `benchmark-discovery-blind`。Agent 可主动申请 transient absorption、electrochemical controls、post-SET barriers 和 structural analogue 测量；Oracle 只在调用后返回测量，不返回论文结论。
+- Blind runner 使用显式 allowlist environment，只暴露 `blind_study_oracle / think / functional_groups / molecule_properties`；不注册 `research_memory`、文件读取、文献或网络工具，避免 Agent 读取版本化 case 中的 source、expected outcome 和 scorer。
+- Blind scorer 要求至少 3 项主动测量、正确 outcome、完整 mechanism chain 和无矛盾结论。机理必须覆盖：两底物的 forward SET regime、ketyl beta-scission 与 BET 竞争、styrene radical anion 的 BET recycling、以及 post-SET branching 而非 redox ordering 控制产物。
+- Source title、URL、expected outcome、success criteria 和 mechanism scoring chain 均不进入 Agent prompt/goal state；Agent 只看到原始问题、可申请测量及“至少申请 3 项”的过程约束。Scorer 另有否定/反向因果反例，`H2 is ruled out / H1 major / BET faster than beta-scission / styrene not recycled` 不能通过。
+- 修复真实模型运行暴露的结构化协议问题：兼容扁平 tool action 和数值 `estimated_cost`；`run_python/run_command` 广告别名会归一化到对应 execution path；schema/policy rejection 会记录有界原始响应并在下一轮 observation 中带回拒绝动作和原因。
+- 修复 open-ended discovery completion：无 route graph 时，goal-level evidence 可支持 `H1/H2/H3` 等命名假设；有路线任务仍要求 route/evidence 严格关联。
+- 修复 stopping criteria 的可审计扩展写法：接受 `exact criterion: evidence detail`，仍拒绝缺项、任意意译或不匹配前缀。
+- 最终独立运行使用 3 项隐藏测量，正确选择 H2：photoexcited perylene 使两底物都可快速 SET；ketyl beta-scission（5.5 kcal/mol）抢在 BET 前发生，open radical 加成 styrene 并闭环；styrene radical anion 则由 BET 回收，因此形成 `[3+2]` annulation，而非按 0.30 V 电位优势得到 H1。
+- 正式结果：`exit_status=Submitted`，`outcome_pass=true`，6/6 mechanism groups 通过，`measurement_pass=true`，`contradiction_pass=true`，`blind_pass=true`；CLI 汇总为 `Blind passed: 1/1`。
+- 验证命令：
+  - `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`
+  - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
+  - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --dry-run --output-dir /tmp/retroagent_blind_dryrun`
+  - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --run --max-cycles 16 --output-dir logs/discovery_blind_benchmark_verified_final4`

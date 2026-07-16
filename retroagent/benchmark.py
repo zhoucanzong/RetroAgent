@@ -12,6 +12,223 @@ from rdkit import Chem
 
 
 @dataclass
+class DiscoveryBlindCase:
+    id: str
+    published_date: str
+    source_title: str
+    source_url: str
+    task: str
+    experiments: dict[str, dict[str, Any]]
+    expected_outcome: str
+    outcome_claim_groups: list[list[str]]
+    mechanism_claim_groups: list[list[str]]
+    contradiction_phrases: list[str]
+    min_experiments: int
+    success_criteria: list[str]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DiscoveryBlindCase":
+        case = cls(
+            id=str(data["id"]),
+            published_date=str(data["published_date"]),
+            source_title=str(data["source_title"]),
+            source_url=str(data["source_url"]),
+            task=str(data["task"]),
+            experiments={str(key): dict(value) for key, value in data["experiments"].items()},
+            expected_outcome=str(data["expected_outcome"]),
+            outcome_claim_groups=[list(group) for group in data["outcome_claim_groups"]],
+            mechanism_claim_groups=[list(group) for group in data["mechanism_claim_groups"]],
+            contradiction_phrases=list(data.get("contradiction_phrases", [])),
+            min_experiments=int(data.get("min_experiments", 2)),
+            success_criteria=list(data["success_criteria"]),
+        )
+        if not case.id or not case.task:
+            raise ValueError("blind case id and task are required")
+        if len(case.experiments) < case.min_experiments:
+            raise ValueError(f"{case.id}: insufficient registered experiments")
+        if not case.outcome_claim_groups or not case.mechanism_claim_groups:
+            raise ValueError(f"{case.id}: outcome and mechanism claim groups are required")
+        if not case.success_criteria:
+            raise ValueError(f"{case.id}: success criteria are required")
+        return case
+
+    def task_prompt(self) -> str:
+        measurements = "; ".join(
+            f"{experiment_id}: {experiment.get('question', '')}"
+            for experiment_id, experiment in self.experiments.items()
+        )
+        return (
+            "STRICT BLIND TEST. Do not use web_search, fetch_url, literature search, internet "
+            "access, or prior knowledge of a paper. Use the supplied facts and local tools only.\n"
+            f"{self.task}\n"
+            f"The registered blind_study_oracle can reveal these withheld measurements: {measurements}.\n"
+            f"Actively request at least {self.min_experiments} measurements before concluding. "
+            "The oracle never reveals the published product assignment or conclusion.\n"
+            "Return one decisive evidence-backed answer that states what each requested measurement "
+            "establishes, with uncertainty and falsification conditions."
+        )
+
+
+def load_blind_cases(path: Path) -> list[DiscoveryBlindCase]:
+    cases = []
+    for line_no, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            cases.append(DiscoveryBlindCase.from_dict(json.loads(line)))
+        except Exception as exc:
+            raise ValueError(f"Invalid blind benchmark case at {path}:{line_no}: {exc}") from exc
+    return cases
+
+
+def score_blind_conclusion(
+    conclusion: str,
+    case: DiscoveryBlindCase,
+    *,
+    queried_experiment_ids: list[str],
+) -> dict[str, Any]:
+    normalized = " ".join((conclusion or "").lower().split())
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", normalized)
+        if sentence.strip()
+    ]
+
+    def groups_pass(groups: list[list[str]]) -> tuple[bool, list[bool]]:
+        matches = [any(term.lower() in normalized for term in group) for group in groups]
+        return all(matches), matches
+
+    _, outcome_matches = groups_pass(case.outcome_claim_groups)
+    h2_positive = any(re.search(
+        r"(?:major (?:chemical )?(?:outcome|product)\s*(?:is|:)?\s*h2|"
+        r"\bh2\b.{0,30}(?:the )?major (?:outcome|product)|"
+        r"(?:select|choose|support|favor)\w*\s+h2\b)",
+        sentence,
+    ) for sentence in sentences)
+    h2_negative = any(re.search(
+        r"\bh2\b.{0,30}(?:lacks? support|is (?:ruled out|rejected|incorrect|false|not supported)|"
+        r"was (?:ruled out|rejected)|is not the major)",
+        sentence,
+    ) for sentence in sentences)
+    h1_selected = any(re.search(
+        r"(?:major (?:chemical )?(?:outcome|product)\s*(?:is|:)?\s*h1|"
+        r"(?:select|choose|support|favor)\w*\s+h1\b|"
+        r"\bh1\b.{0,30}(?:the )?major (?:outcome|product)|\bh1\b.{0,20}dominates)",
+        sentence,
+    ) for sentence in sentences)
+    outcome_pass = h2_positive and not h2_negative and not h1_selected
+
+    scission_terms = ("beta-scission", "β-scission", "ring opening", "ring-opening", "fragment")
+    bet_pattern = r"(?:\bbet\b|back electron transfer)"
+    scission_pattern = r"(?:beta-scission|β-scission|ring opening|ring-opening|fragment(?:s|ed|ing|ation)?)"
+    has_forward_regime = any(
+        "both substrates" in sentence
+        and any(term in sentence for term in (
+            "diffusion", "indiscriminate", "non-selective", "nonselective", "reduces both", "rapid",
+        ))
+        for sentence in sentences
+    )
+    has_scission = any(any(term in sentence for term in scission_terms) for sentence in sentences)
+    correct_scission_comparison = any(
+        re.search(
+            rf"{scission_pattern}.{{0,100}}(?:faster than|outcompet(?:es|ing)|outrun(?:s|ning)?|before).{{0,80}}{bet_pattern}",
+            sentence,
+        )
+        for sentence in sentences
+    )
+    inverse_scission_comparison = any(
+        re.search(
+            rf"{bet_pattern}.{{0,100}}(?:faster than|outcompetes|outruns|happens before|before).{{0,80}}{scission_pattern}",
+            sentence,
+        )
+        or re.search(rf"{scission_pattern}.{{0,80}}slower than.{{0,50}}{bet_pattern}", sentence)
+        for sentence in sentences
+    )
+    has_styrene_radical = any(
+        "styrene radical anion" in sentence or "styrene radical-anion" in sentence
+        or "styrene•−" in sentence
+        for sentence in sentences
+    )
+    styrene_fate_sentences = [
+        sentence for sentence in sentences
+        if (
+            "styrene radical anion" in sentence
+            or "styrene radical-anion" in sentence
+            or "styrene•−" in sentence
+        ) and re.search(bet_pattern, sentence)
+    ]
+    styrene_recycling_negated = any(re.search(
+        r"(?:not|never|fails? to|does not|doesn't).{0,40}(?:recycl|recover|reoxid)|"
+        r"(?:recycl|recover|reoxid).{0,30}(?:not|never|fails)",
+        sentence,
+    ) for sentence in styrene_fate_sentences)
+    has_correct_styrene_fate = any(
+        (
+            any(term in sentence for term in ("recycl", "recover", "reoxid"))
+            or re.search(rf"{bet_pattern}.{{0,80}}faster than proton", sentence)
+        )
+        for sentence in styrene_fate_sentences
+    ) and not styrene_recycling_negated
+    post_set_sentences = [
+        sentence for sentence in sentences if "post-set" in sentence or "post set" in sentence
+    ]
+    post_set_control_negated = any(re.search(
+        r"(?:does not|do not|doesn't|fails? to|not).{0,30}(?:control|determin|govern|dominat)|"
+        r"(?:control|determin|govern|dominat).{0,30}(?:does not|do not|doesn't|not)",
+        sentence,
+    ) for sentence in post_set_sentences)
+    has_post_set_control = any(
+        any(term in sentence for term in ("branch", "kinetic", "competition"))
+        and any(term in sentence for term in (
+            "selectiv", "product-determining", "product determining", "determin", "control", "dominat",
+        ))
+        for sentence in post_set_sentences
+    ) and not post_set_control_negated
+
+    if len(case.mechanism_claim_groups) >= 6:
+        mechanism_matches = [
+            has_forward_regime,
+            has_scission,
+            correct_scission_comparison and not inverse_scission_comparison,
+            has_styrene_radical,
+            has_correct_styrene_fate,
+            has_post_set_control,
+        ]
+        mechanism_pass = all(mechanism_matches)
+    else:
+        mechanism_pass, mechanism_matches = groups_pass(case.mechanism_claim_groups)
+    contradictions = [
+        phrase for phrase in case.contradiction_phrases if phrase.lower() in normalized
+    ]
+    if h2_negative:
+        contradictions.append("H2 explicitly rejected")
+    if h1_selected:
+        contradictions.append("H1 declared major")
+    if inverse_scission_comparison:
+        contradictions.append("BET incorrectly outruns beta-scission")
+    if styrene_recycling_negated:
+        contradictions.append("styrene radical anion explicitly not recycled")
+    if post_set_control_negated:
+        contradictions.append("post-SET control explicitly negated")
+    queried = sorted({item for item in queried_experiment_ids if item in case.experiments})
+    measurement_pass = len(queried) >= case.min_experiments
+    contradiction_pass = not contradictions
+    return {
+        "expected_outcome": case.expected_outcome,
+        "outcome_pass": outcome_pass,
+        "outcome_group_matches": outcome_matches,
+        "mechanism_pass": mechanism_pass,
+        "mechanism_group_matches": mechanism_matches,
+        "measurement_pass": measurement_pass,
+        "queried_experiment_ids": queried,
+        "queried_experiment_count": len(queried),
+        "contradiction_pass": contradiction_pass,
+        "contradictions": contradictions,
+        "blind_pass": outcome_pass and mechanism_pass and measurement_pass and contradiction_pass,
+    }
+
+
+@dataclass
 class DiscoveryFeedbackCase:
     id: str
     target_name: str

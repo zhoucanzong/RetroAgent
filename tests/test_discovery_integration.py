@@ -10,11 +10,13 @@ from retroagent.agents.discovery_controller import DiscoveryController
 from retroagent.agents.planner import RetroPlanner
 from retroagent.benchmark import (
     analyze_research_events,
+    load_blind_cases,
     load_feedback_cases,
     score_closed_loop_events,
 )
 from retroagent.config import load_config
-from retroagent.run.retro import _build_agent_for_mode, app
+from retroagent.research_execution import PermissionGrant, PermissionMode
+from retroagent.run.retro import _build_agent_for_mode, _build_blind_environment, app
 from retroagent.tools.feedback_oracle import FeedbackOracleTool
 
 
@@ -112,6 +114,51 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(rows[0]["exit_status"], "DryRun")
         self.assertEqual(rows[0]["metrics"]["initial_route_count"], 2)
+
+    def test_blind_study_benchmark_dry_run_validates_withheld_case(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "blind"
+            result = runner.invoke(app, [
+                "benchmark-discovery-blind",
+                "--cases", str(PROJECT_DIR / "benchmarks" / "blind_studies.jsonl"),
+                "--output-dir", str(output_dir),
+                "--dry-run",
+            ])
+            rows = [json.loads(line) for line in (output_dir / "results.jsonl").read_text().splitlines()]
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(rows[0]["exit_status"], "DryRun")
+        self.assertEqual(rows[0]["published_date"], "2026-07-15")
+        self.assertEqual(rows[0]["metrics"]["registered_experiment_count"], 4)
+        self.assertNotIn("expected_outcome", rows[0])
+
+    def test_blind_study_environment_excludes_answer_leaking_tools(self):
+        case = load_blind_cases(PROJECT_DIR / "benchmarks" / "blind_studies.jsonl")[0]
+
+        env = _build_blind_environment(case)
+        names = {tool["name"] for tool in env.get_tools_spec()}
+
+        self.assertEqual(names, {
+            "blind_study_oracle", "think", "functional_groups", "molecule_properties",
+        })
+        self.assertTrue({
+            "research_memory", "web_search", "fetch_url", "search_literature",
+            "convert_identifier", "check_patent",
+        }.isdisjoint(names))
+        self.assertNotEqual(
+            env.execute({"tool": "bash", "parameters": {"command": "printf must-not-run"}})["returncode"],
+            0,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = DiscoveryController(
+                _Model(),
+                env,
+                workspace=tmp,
+                permission_grant=PermissionGrant(mode=PermissionMode.RESTRICTED),
+                allow_execution_tools=False,
+            )
+        self.assertEqual({tool["name"] for tool in controller._tools_spec()}, names)
 
     def test_event_metrics_prove_failure_driven_replanning(self):
         events = [

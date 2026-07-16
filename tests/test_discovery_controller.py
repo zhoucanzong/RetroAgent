@@ -247,6 +247,40 @@ class DiscoveryControllerTests(unittest.TestCase):
         self.assertEqual(len(rejections), 1)
         self.assertIn("evidence", rejections[0].payload["reason"])
 
+    def test_targetless_discovery_can_complete_with_recorded_goal_evidence(self):
+        model = _ScriptedModel([
+            _decision("tool", {"tool": "inspect_route", "parameters": {}}, []),
+            _decision(
+                "stop", {}, [], stop=True, conclusion="The mechanistic hypothesis is supported.",
+                evidence_ids=["evidence_0001"],
+            ),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, _FeedbackEnv(), ledger=ResearchLedger(), workspace=tmp,
+            ).run("explain an open-ended reaction mechanism")
+
+        self.assertEqual(result["exit_status"], "Submitted")
+        self.assertEqual(result["target_ids"], [])
+
+    def test_open_discovery_hypothesis_label_can_use_goal_level_evidence(self):
+        model = _ScriptedModel([
+            _decision("tool", {"tool": "inspect_route", "parameters": {}}, []),
+            _decision(
+                "stop", {}, ["H2"], stop=True, conclusion="H2 is supported by the measurement.",
+                evidence_ids=["evidence_0001"],
+            ),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, _FeedbackEnv(), ledger=ResearchLedger(), workspace=tmp,
+            ).run("choose among named mechanism hypotheses")
+
+        self.assertEqual(result["exit_status"], "Submitted")
+        self.assertEqual(result["target_ids"], ["H2"])
+
     def test_stop_must_satisfy_explicit_goal_criteria(self):
         ledger = _competing_routes_ledger()
         ledger.append("goal_set", {
@@ -273,6 +307,31 @@ class DiscoveryControllerTests(unittest.TestCase):
         self.assertEqual(result["exit_status"], "Submitted")
         rejection = next(event for event in ledger.events if event.type == "decision_rejected")
         self.assertIn("stopping criteria", rejection.payload["reason"])
+
+    def test_stop_criteria_accept_exact_prefix_followed_by_evidence_detail(self):
+        ledger = ResearchLedger()
+        ledger.append("goal_set", {
+            "task": "test", "stopping_criteria": ["route inspected", "alternatives considered"],
+        })
+        completed = _decision(
+            "stop", {}, [], stop=True, conclusion="The evidence supports the selected mechanism.",
+            evidence_ids=["evidence_0001"],
+        )
+        completed["satisfied_criteria"] = [
+            "route inspected: evidence_0001",
+            "alternatives considered: H1 and H3 rejected",
+        ]
+        model = _ScriptedModel([
+            _decision("tool", {"tool": "inspect_route", "parameters": {}}, []),
+            completed,
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, _FeedbackEnv(), ledger=ledger, workspace=tmp,
+            ).run("test")
+
+        self.assertEqual(result["exit_status"], "Submitted")
 
     def test_estimated_time_budget_rejects_unaffordable_action_before_execution(self):
         expensive = _decision(
@@ -416,6 +475,60 @@ class DiscoveryControllerTests(unittest.TestCase):
         finished = [event for event in ledger.events if event.type == "execution_finished"]
         self.assertIn("computed descriptor", finished[0].payload["result"]["stdout"])
 
+    def test_advertised_run_python_tool_alias_uses_code_execution_path(self):
+        model = _ScriptedModel([
+            _decision(
+                "tool",
+                {"tool": "run_python", "parameters": {"code": "print('alias executed')"}},
+                ["route_b"],
+            ),
+            _decision(
+                "stop", {}, ["route_b"], stop=True, conclusion="The alias computation completed.",
+                evidence_ids=["evidence_0001"],
+            ),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model,
+                _FeedbackEnv(),
+                ledger=_competing_routes_ledger(),
+                workspace=tmp,
+                permission_grant=PermissionGrant(
+                    mode=PermissionMode.FULL, scopes={"code_execution"},
+                ),
+            ).run("test")
+
+        self.assertEqual(result["exit_status"], "Submitted")
+        finished = [event for event in result["events"] if event.type == "execution_finished"]
+        self.assertIn("alias executed", finished[0].payload["result"]["stdout"])
+
+    def test_execution_aliases_remain_blocked_in_restricted_mode(self):
+        aliases = [
+            {"tool": "run_python", "parameters": {"code": "print('must not run')"}},
+            {"tool": "run_command", "parameters": {"command": "printf must-not-run"}},
+        ]
+        for action in aliases:
+            with self.subTest(tool=action["tool"]), tempfile.TemporaryDirectory() as tmp:
+                model = _ScriptedModel([_decision("tool", action, [], stop=False)])
+                result = DiscoveryController(
+                    model,
+                    _FeedbackEnv(),
+                    ledger=ResearchLedger(),
+                    workspace=tmp,
+                    permission_grant=PermissionGrant(mode=PermissionMode.RESTRICTED),
+                    max_cycles=1,
+                ).run("test")
+
+                self.assertEqual(result["exit_status"], "StepLimit")
+                self.assertFalse(any(
+                    event.type == "execution_started" for event in result["events"]
+                ))
+                self.assertTrue(any(
+                    event.type == "decision_rejected" and "restricted" in event.payload["reason"]
+                    for event in result["events"]
+                ))
+
     def test_malformed_tool_action_is_rejected_without_crashing_loop(self):
         model = _ScriptedModel([
             _decision("tool", {}, ["route_b"]),
@@ -433,6 +546,70 @@ class DiscoveryControllerTests(unittest.TestCase):
 
         self.assertEqual(result["exit_status"], "Submitted")
         self.assertEqual(len([event for event in result["events"] if event.type == "decision_rejected"]), 1)
+
+    def test_rejected_decision_records_bounded_model_diagnostics(self):
+        malformed = _decision("tool", "think", "route_b")
+        model = _ScriptedModel([
+            malformed,
+            _decision("tool", {"tool": "inspect_route", "parameters": {"route_id": "route_b"}}, ["route_b"]),
+            _decision(
+                "stop", {}, ["route_b"], stop=True, conclusion="Route B inspected.",
+                evidence_ids=["evidence_0001"],
+            ),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, _FeedbackEnv(), ledger=_competing_routes_ledger(), workspace=tmp,
+            ).run("test")
+
+        rejection = next(event for event in result["events"] if event.type == "decision_rejected")
+        self.assertEqual(rejection.payload["decision"]["action"]["tool"], "think")
+        self.assertEqual(rejection.payload["decision"]["target_ids"], "route_b")
+        self.assertIn('"action": "think"', rejection.payload["model_response"])
+        self.assertLessEqual(len(rejection.payload["model_response"]), 4000)
+
+    def test_common_flat_tool_decision_is_normalized_before_validation(self):
+        flattened = _decision("tool", "inspect_route", ["route_b"])
+        flattened["estimated_cost"] = 0.25
+        model = _ScriptedModel([
+            flattened,
+            _decision(
+                "stop", {}, ["route_b"], stop=True, conclusion="Route B inspected.",
+                evidence_ids=["evidence_0001"],
+            ),
+        ])
+        env = _FeedbackEnv()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, env, ledger=_competing_routes_ledger(), workspace=tmp,
+            ).run("test")
+
+        self.assertEqual(result["exit_status"], "Submitted")
+        self.assertEqual(env.calls, [{"tool": "inspect_route", "parameters": {}}])
+        self.assertFalse(any(event.type == "decision_rejected" for event in result["events"]))
+
+    def test_schema_rejection_is_visible_to_the_next_decision_cycle(self):
+        model = _ScriptedModel([
+            _decision("state", "propose_hypothesis", []),
+            _decision("tool", {"tool": "inspect_route", "parameters": {}}, ["route_b"]),
+            _decision(
+                "stop", {}, ["route_b"], stop=True, conclusion="Route B inspected.",
+                evidence_ids=["evidence_0001"],
+            ),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, _FeedbackEnv(), ledger=_competing_routes_ledger(), workspace=tmp,
+            ).run("test")
+
+        self.assertEqual(result["exit_status"], "Submitted")
+        rejection = model.observations[1]["state"]["recent_rejections"][0]
+        self.assertIn("action", rejection["reason"])
+        self.assertEqual(rejection["cycle"], 1)
+        self.assertEqual(rejection["action"], "propose_hypothesis")
 
     def test_non_object_tool_parameters_are_rejected_without_crashing_loop(self):
         model = _ScriptedModel([

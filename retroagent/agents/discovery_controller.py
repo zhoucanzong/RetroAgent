@@ -14,12 +14,26 @@ from retroagent.research_state import ResearchLedger, next_entity_id
 
 
 _SYSTEM_PROMPT = """You are RetroAgent's autonomous chemistry research controller.
-Choose exactly one next research action from the current state. Return one JSON object with:
-research_question, action_type, action, target_ids, rationale, expected_observation,
-falsification_condition, estimated_cost, stop, conclusion, evidence_ids, and satisfied_criteria.
-Use action_type state, tool, python, command, or stop. State actions may propose_hypothesis
-or set_subgoal; they organize research but do not count as evidence. Negative evidence must change the next action.
-Do not repeat an unchanged failed action. A stop decision must cite recorded evidence ids.
+Choose exactly one next research action from the current state and return only one JSON object.
+Every decision must contain research_question, action_type, action, target_ids, rationale,
+expected_observation, falsification_condition, estimated_cost, stop, conclusion, evidence_ids,
+and satisfied_criteria. estimated_cost must be an object with numeric time_minutes and string compute.
+
+Tool example:
+{"research_question":"What evidence discriminates the hypotheses?","action_type":"tool","action":{"tool":"think","parameters":{"thought":"Compare the competing mechanisms."}},"target_ids":[],"rationale":"Reason before choosing a measurement.","expected_observation":"A discriminating prediction.","falsification_condition":"The hypotheses remain indistinguishable.","estimated_cost":{"time_minutes":0.1,"compute":"low"},"stop":false,"conclusion":"","evidence_ids":[],"satisfied_criteria":[]}
+
+State example:
+{"research_question":"Which hypothesis should be tracked?","action_type":"state","action":{"operation":"propose_hypothesis","hypothesis":{"id":"hyp_1","claim":"A testable chemical claim.","falsification_condition":"A specific contrary observation."}},"target_ids":[],"rationale":"Track a competing explanation.","expected_observation":"The hypothesis is recorded.","falsification_condition":"The hypothesis cannot be stated testably.","estimated_cost":{"time_minutes":0.1,"compute":"low"},"stop":false,"conclusion":"","evidence_ids":[],"satisfied_criteria":[]}
+
+Stop example:
+{"research_question":"Are the stopping criteria met?","action_type":"stop","action":{},"target_ids":["hyp_1"],"rationale":"Recorded evidence supports a conclusion.","expected_observation":"No further action is required.","falsification_condition":"New evidence overturns the conclusion.","estimated_cost":{"time_minutes":0,"compute":"none"},"stop":true,"conclusion":"Decisive evidence-backed answer.","evidence_ids":["evidence_0001"],"satisfied_criteria":[]}
+
+Never return action as a string or estimated_cost as a number. Use action_type state, tool, python,
+command, or stop. State actions may propose_hypothesis or set_subgoal; they organize research but do
+not count as evidence. Negative evidence must change the next action. Do not repeat an unchanged
+failed action. Recent schema or policy failures appear in state.recent_rejections; do not repeat a
+rejected action while the reason and permission state are unchanged. A stop decision must cite
+recorded evidence ids.
 """
 
 
@@ -35,6 +49,7 @@ class DiscoveryController:
         max_cycles: int = 30,
         max_estimated_minutes: float = 120,
         timeout: float = 120,
+        allow_execution_tools: bool = True,
     ):
         self.model = model
         self.env = env
@@ -42,6 +57,7 @@ class DiscoveryController:
         self.permission_grant = permission_grant or PermissionGrant()
         self.max_cycles = max_cycles
         self.max_estimated_minutes = float(max_estimated_minutes)
+        self.allow_execution_tools = bool(allow_execution_tools)
         self.policy = PolicyEngine()
         self.executor = ResearchExecutor(workspace, timeout=timeout)
         self.assimilator = EvidenceAssimilator()
@@ -71,12 +87,19 @@ class DiscoveryController:
                 ],
                 tools=None,
             )
+            decision: dict[str, Any] | None = None
             try:
                 decision = _parse_decision(response)
                 _validate_decision(decision)
             except ValueError as exc:
+                rejection = {
+                    "reason": str(exc),
+                    "model_response": str(response.get("content", ""))[:4000],
+                }
+                if decision is not None:
+                    rejection["decision"] = decision
                 self.ledger.append(
-                    "decision_rejected", {"reason": str(exc)}, actor="controller", cycle=cycle,
+                    "decision_rejected", rejection, actor="controller", cycle=cycle,
                 )
                 continue
 
@@ -348,7 +371,13 @@ class DiscoveryController:
         state = self.ledger.replay()
         required_criteria = {str(item) for item in state.goal.get("stopping_criteria", [])}
         satisfied_criteria = {str(item) for item in decision.get("satisfied_criteria", [])}
-        missing_criteria = sorted(required_criteria - satisfied_criteria)
+        missing_criteria = sorted(
+            criterion for criterion in required_criteria
+            if not any(
+                reported == criterion or reported.startswith(f"{criterion}:")
+                for reported in satisfied_criteria
+            )
+        )
         if missing_criteria:
             return f"completion has unsatisfied stopping criteria: {', '.join(missing_criteria)}"
         missing = [item for item in evidence_ids if item not in state.evidence]
@@ -361,7 +390,10 @@ class DiscoveryController:
         if failed_targets:
             return f"completion selects failed routes: {', '.join(failed_targets)}"
         selected_targets = {str(item) for item in decision.get("target_ids", [])}
-        relevant = False
+        relevant = bool(
+            not state.routes
+            and any(not state.evidence[evidence_id].get("target_ids") for evidence_id in evidence_ids)
+        )
         for evidence_id in evidence_ids:
             evidence = state.evidence[evidence_id]
             evidence_targets = {str(item) for item in evidence.get("target_ids", [])}
@@ -381,10 +413,11 @@ class DiscoveryController:
 
     def _tools_spec(self) -> list[dict[str, Any]]:
         specs = list(self.env.get_tools_spec()) if hasattr(self.env, "get_tools_spec") else []
-        specs.extend([
-            {"name": "run_python", "description": "Run temporary Python analysis in the research workspace", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}},
-            {"name": "run_command", "description": "Run a system command in the research workspace", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-        ])
+        if self.allow_execution_tools:
+            specs.extend([
+                {"name": "run_python", "description": "Run temporary Python analysis in the research workspace", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}},
+                {"name": "run_command", "description": "Run a system command in the research workspace", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+            ])
         return specs
 
     def _result(self, exit_status: str, **extra: Any) -> dict[str, Any]:
@@ -401,7 +434,7 @@ class DiscoveryController:
 def _parse_decision(response: dict[str, Any]) -> dict[str, Any]:
     decision = (response.get("extra", {}) or {}).get("decision")
     if isinstance(decision, dict):
-        return dict(decision)
+        return _normalize_decision(decision)
     content = response.get("content", "")
     try:
         parsed = json.loads(content)
@@ -415,7 +448,33 @@ def _parse_decision(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("decision must be one JSON object") from fenced_exc
     if not isinstance(parsed, dict):
         raise ValueError("decision must be one JSON object")
-    return parsed
+    return _normalize_decision(parsed)
+
+
+def _normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    """Normalize common model shorthands without weakening semantic validation."""
+    normalized = dict(decision)
+    action = normalized.get("action")
+    if normalized.get("action_type") == "tool" and isinstance(action, str):
+        normalized["action"] = {"tool": action, "parameters": {}}
+        action = normalized["action"]
+    if normalized.get("action_type") == "tool" and isinstance(action, dict):
+        parameters = action.get("parameters", {})
+        if not isinstance(parameters, dict):
+            parameters = {}
+        if action.get("tool") == "run_python":
+            normalized["action_type"] = "python"
+            normalized["action"] = {"code": str(parameters.get("code", ""))}
+        elif action.get("tool") == "run_command":
+            normalized["action_type"] = "command"
+            normalized["action"] = {"command": str(parameters.get("command", ""))}
+    estimated_cost = normalized.get("estimated_cost")
+    if isinstance(estimated_cost, (int, float)) and not isinstance(estimated_cost, bool):
+        normalized["estimated_cost"] = {
+            "time_minutes": estimated_cost,
+            "compute": "unspecified",
+        }
+    return normalized
 
 
 def _validate_decision(decision: dict[str, Any]) -> None:
