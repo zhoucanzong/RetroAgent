@@ -285,6 +285,7 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
 - 最终独立运行使用 3 项隐藏测量，正确选择 H2：photoexcited perylene 使两底物都可快速 SET；ketyl beta-scission（5.5 kcal/mol）抢在 BET 前发生，open radical 加成 styrene 并闭环；styrene radical anion 则由 BET 回收，因此形成 `[3+2]` annulation，而非按 0.30 V 电位优势得到 H1。
 - 正式结果：`exit_status=Submitted`，`outcome_pass=true`，6/6 mechanism groups 通过，`measurement_pass=true`，`contradiction_pass=true`，`blind_pass=true`；CLI 汇总为 `Blind passed: 1/1`。
 - 验证命令：
+
   - `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`
   - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
   - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --dry-run --output-dir /tmp/retroagent_blind_dryrun`
