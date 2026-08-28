@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retroagent"
+version = "0.2.0"
+description = "Auditable agent-native CLI for autonomous chemistry research"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+  "h5py>=3.11.0",
+  "jinja2>=3.1.4",
+  "numpy>=1.26.0",
+  "onnxruntime>=1.18.0",
+  "openai>=1.35.0",
+  "pandas>=2.2.0",
+  "pydantic>=2.8.0",
+  "pyyaml>=6.0.1",
+  "rdchiral>=1.1.0",
+  "rdkit>=2024.3.1",
+  "typer>=0.12.0",
+]
+
+[project.scripts]
+retroagent = "retroagent.run.retro:app"
+
+[tool.setuptools.packages.find]
+include = ["retroagent*"]
+
+[tool.setuptools.package-data]
+retroagent = ["config/default.yaml"]

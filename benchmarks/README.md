@@ -85,6 +85,15 @@ electrophotocatalytic reaction. The oracle withholds the published product
 assignment and exposes only requested transient-absorption, electrochemical,
 post-SET barrier, or structural-analogue measurements.
 
+The second case uses a Nature Chemistry paper published on 2026-07-13. It asks
+the Agent to distinguish a concerted amination/migration, a stepwise
+aziridinium/backside-migration mechanism, and radical or ordinary
+aziridination. Its oracle exposes reaction-progress IR, computed energy,
+spectral-assignment, and stereochemical/reagent-compatibility measurements.
+This case tests temporal ordering, intermediate identification, stereochemical
+inference, and whether the Agent carries every observation needed to explain
+self-limiting chemoselectivity into its conclusion.
+
 Validate the case without an LLM call:
 
 ```bash
@@ -97,6 +106,13 @@ Run the strict offline blind loop:
 .venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --run
 ```
 
+Run one case independently:
+
+```bash
+.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind \
+  --run --case-id boronate-amination-2026-002
+```
+
 `blind_pass` requires all of the following:
 
 - at least three distinct oracle measurements requested by the Agent
@@ -104,7 +120,31 @@ Run the strict offline blind loop:
 - the complete forward-SET and post-SET/BET mechanism chain
 - no contradictory major-product claim
 
+Each case selects a hidden directional scoring profile. The photoreduction and
+aziridinium profiles have separate negation, reversed-causality, and
+counterfactual-falsifier checks so wording from one mechanism cannot satisfy
+the other.
+
 Runtime trajectories and results are written under `logs/`, which is ignored by
 Git. The versioned case contains the source and hidden answer so the evaluator
 can audit the result; restricted benchmark permissions prevent the Agent from
 reading project files or using network tools during the run.
+
+## Discovery Loop v3 trajectory scoring
+
+Score any real Controller JSON or JSONL trajectory without another LLM call:
+
+```bash
+.venv/bin/python -m retroagent.run.retro score-discovery-v3 trajectory.json --require-pass
+```
+
+`discovery_v3_pass` requires all six event-level properties:
+
+- at least two recorded competing hypotheses
+- a rank-1 experiment with positive expected information gain
+- normalized posterior updates that reduce entropy
+- a route portfolio containing multi-source support
+- a route passing the independent validation gate
+- a final decision that selects that validated route and cites recorded evidence
+
+The scorer evaluates the replayable trajectory, not keywords in the final answer.

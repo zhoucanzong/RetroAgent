@@ -45,10 +45,16 @@ class ResearchEvent:
 @dataclass
 class ResearchState:
     goal: dict[str, Any] = field(default_factory=dict)
+    molecules: dict[str, dict[str, Any]] = field(default_factory=dict)
     hypotheses: dict[str, dict[str, Any]] = field(default_factory=dict)
     routes: dict[str, dict[str, Any]] = field(default_factory=dict)
     reactions: dict[str, dict[str, Any]] = field(default_factory=dict)
     evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
+    experiments: dict[str, dict[str, Any]] = field(default_factory=dict)
+    experiment_selections: list[dict[str, Any]] = field(default_factory=list)
+    hypothesis_posterior_updates: list[dict[str, Any]] = field(default_factory=list)
+    route_portfolios: list[dict[str, Any]] = field(default_factory=list)
+    route_validations: dict[str, dict[str, Any]] = field(default_factory=dict)
     evidence_event_index: dict[str, int] = field(default_factory=dict)
     decisions: list[dict[str, Any]] = field(default_factory=list)
     rejections: list[dict[str, Any]] = field(default_factory=list)
@@ -61,6 +67,7 @@ class ResearchState:
     failed_action_targets: dict[str, set[str]] = field(default_factory=dict)
     replan_reasons: list[str] = field(default_factory=list)
     conclusion: dict[str, Any] = field(default_factory=dict)
+    stopped: bool = False
     estimated_minutes_used: float = 0.0
     event_count: int = 0
 
@@ -69,11 +76,19 @@ class ResearchState:
         event_type = event.type
         if event_type == "goal_set":
             self.goal = payload
+        elif event_type == "molecule_registered":
+            molecule = dict(payload)
+            molecule.setdefault("status", "active")
+            self.molecules[str(molecule["id"])] = molecule
         elif event_type == "hypothesis_proposed":
             self.hypotheses[str(payload["id"])] = payload
         elif event_type == "hypothesis_status_changed":
             hypothesis = self.hypotheses.setdefault(str(payload["id"]), {"id": payload["id"]})
             hypothesis.update(payload)
+        elif event_type == "hypothesis_posterior_updated":
+            hypothesis = self.hypotheses.setdefault(str(payload["id"]), {"id": payload["id"]})
+            hypothesis.update(payload)
+            self.hypothesis_posterior_updates.append(payload)
         elif event_type == "route_registered":
             route = dict(payload)
             route.setdefault("status", "proposed")
@@ -87,6 +102,17 @@ class ResearchState:
         elif event_type == "route_status_changed":
             route = self.routes.setdefault(str(payload["id"]), {"id": payload["id"]})
             route.update(payload)
+        elif event_type == "route_portfolio_built":
+            self.route_portfolios.append(payload)
+        elif event_type == "route_validated":
+            route_id = str(payload["id"])
+            route = self.routes.setdefault(route_id, {"id": route_id})
+            route.update({
+                "validation_status": payload.get("status", "needs-evidence"),
+                "validation_confidence": payload.get("confidence", 0.0),
+                "validation_report_id": payload.get("report_id", ""),
+            })
+            self.route_validations[route_id] = payload
         elif event_type == "reaction_status_changed":
             reaction = self.reactions.setdefault(str(payload["id"]), {"id": payload["id"]})
             reaction.update(payload)
@@ -106,6 +132,19 @@ class ResearchState:
                 raise ValueError(f"Duplicate evidence id: {evidence_id}")
             self.evidence[evidence_id] = payload
             self.evidence_event_index[evidence_id] = self.event_count
+        elif event_type == "experiment_registered":
+            experiment = dict(payload)
+            experiment.setdefault("status", "proposed")
+            self.experiments[str(experiment["id"])] = experiment
+        elif event_type == "experiment_status_changed":
+            experiment = self.experiments.setdefault(str(payload["id"]), {"id": payload["id"]})
+            experiment.update(payload)
+        elif event_type == "experiment_selected":
+            experiment_id = str(payload["id"])
+            experiment = self.experiments.setdefault(experiment_id, {"id": experiment_id})
+            experiment.update(payload)
+            experiment["status"] = "selected"
+            self.experiment_selections.append(payload)
         elif event_type == "decision_made":
             self.decisions.append(payload)
         elif event_type == "decision_rejected":
@@ -121,8 +160,13 @@ class ResearchState:
         elif event_type in ("execution_started", "execution_finished"):
             record = {"event_type": event_type, **payload}
             self.executions.append(record)
-        elif event_type in ("approval_requested", "approval_granted", "approval_denied"):
-            self.approvals.append({"event_type": event_type, **payload})
+        elif event_type in ("approval_requested", "approval_granted", "approval_denied", "approval_consumed"):
+            self.approvals.append({
+                "event_id": event.id,
+                "causal_parent_id": event.causal_parent_id,
+                "event_type": event_type,
+                **payload,
+            })
         elif event_type == "action_failed":
             fingerprint = str(payload.get("fingerprint", ""))
             if fingerprint:
@@ -138,6 +182,9 @@ class ResearchState:
             self.replan_reasons.append(str(payload.get("reason", "new evidence")))
         elif event_type == "research_completed":
             self.conclusion = payload
+            self.stopped = False
+        elif event_type == "research_stopped":
+            self.stopped = True
         elif event_type == "budget_charged":
             self.estimated_minutes_used += float(payload.get("time_minutes", 0.0) or 0.0)
         self.event_count += 1
@@ -147,17 +194,27 @@ class ResearchState:
         return bool(self.replan_reasons)
 
     def to_observation(self) -> dict[str, Any]:
+        molecules = list(self.molecules.values())
         hypotheses = list(self.hypotheses.values())
         routes = list(self.routes.values())
         reactions = list(self.reactions.values())
+        experiments = list(self.experiments.values())
         return {
             "goal": dict(self.goal),
+            "molecules": molecules[-30:],
+            "molecule_count": len(molecules),
             "hypotheses": hypotheses[-30:],
             "hypothesis_count": len(hypotheses),
             "routes": routes[-30:],
             "route_count": len(routes),
             "reactions": reactions[-100:],
             "reaction_count": len(reactions),
+            "experiments": experiments[-30:],
+            "experiment_count": len(experiments),
+            "recent_experiment_selections": self.experiment_selections[-10:],
+            "recent_posterior_updates": self.hypothesis_posterior_updates[-20:],
+            "recent_route_portfolios": self.route_portfolios[-5:],
+            "route_validations": list(self.route_validations.values())[-20:],
             "recent_evidence": [_compact_evidence(item) for item in list(self.evidence.values())[-20:]],
             "recent_decisions": self.decisions[-10:],
             "recent_rejections": self.rejections[-5:],
@@ -168,6 +225,7 @@ class ResearchState:
             "replan_reasons": list(self.replan_reasons[-10:]),
             "event_count": self.event_count,
             "estimated_minutes_used": round(self.estimated_minutes_used, 3),
+            "stopped": self.stopped,
         }
 
 

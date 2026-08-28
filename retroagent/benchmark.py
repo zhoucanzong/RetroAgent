@@ -25,6 +25,7 @@ class DiscoveryBlindCase:
     contradiction_phrases: list[str]
     min_experiments: int
     success_criteria: list[str]
+    scoring_profile: str
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DiscoveryBlindCase":
@@ -41,6 +42,7 @@ class DiscoveryBlindCase:
             contradiction_phrases=list(data.get("contradiction_phrases", [])),
             min_experiments=int(data.get("min_experiments", 2)),
             success_criteria=list(data["success_criteria"]),
+            scoring_profile=str(data.get("scoring_profile", "photoreduction_post_set")),
         )
         if not case.id or not case.task:
             raise ValueError("blind case id and task are required")
@@ -50,6 +52,8 @@ class DiscoveryBlindCase:
             raise ValueError(f"{case.id}: outcome and mechanism claim groups are required")
         if not case.success_criteria:
             raise ValueError(f"{case.id}: success criteria are required")
+        if case.scoring_profile not in {"photoreduction_post_set", "aziridinium_migration"}:
+            raise ValueError(f"{case.id}: unsupported scoring profile {case.scoring_profile!r}")
         return case
 
     def task_prompt(self) -> str:
@@ -64,6 +68,12 @@ class DiscoveryBlindCase:
             f"The registered blind_study_oracle can reveal these withheld measurements: {measurements}.\n"
             f"Actively request at least {self.min_experiments} measurements before concluding. "
             "The oracle never reveals the published product assignment or conclusion.\n"
+            "Before stopping, audit every conclusion dimension explicitly requested in the task "
+            "against recorded evidence. If an available measurement addresses a dimension that "
+            "would otherwise rely on an unsupported inference, request it rather than guessing.\n"
+            "When one measurement reports several observations relevant to different task "
+            "dimensions, carry each needed observation into the conclusion.\n"
+            "Use explicit Uncertainty: and Falsification: labels in the final answer.\n"
             "Return one decisive evidence-backed answer that states what each requested measurement "
             "establishes, with uncertainty and falsification conditions."
         )
@@ -87,6 +97,13 @@ def score_blind_conclusion(
     *,
     queried_experiment_ids: list[str],
 ) -> dict[str, Any]:
+    if case.scoring_profile == "aziridinium_migration":
+        return _score_aziridinium_conclusion(
+            conclusion,
+            case,
+            queried_experiment_ids=queried_experiment_ids,
+        )
+
     normalized = " ".join((conclusion or "").lower().split())
     sentences = [
         sentence.strip()
@@ -210,6 +227,243 @@ def score_blind_conclusion(
         contradictions.append("styrene radical anion explicitly not recycled")
     if post_set_control_negated:
         contradictions.append("post-SET control explicitly negated")
+    queried = sorted({item for item in queried_experiment_ids if item in case.experiments})
+    measurement_pass = len(queried) >= case.min_experiments
+    contradiction_pass = not contradictions
+    return {
+        "expected_outcome": case.expected_outcome,
+        "outcome_pass": outcome_pass,
+        "outcome_group_matches": outcome_matches,
+        "mechanism_pass": mechanism_pass,
+        "mechanism_group_matches": mechanism_matches,
+        "measurement_pass": measurement_pass,
+        "queried_experiment_ids": queried,
+        "queried_experiment_count": len(queried),
+        "contradiction_pass": contradiction_pass,
+        "contradictions": contradictions,
+        "blind_pass": outcome_pass and mechanism_pass and measurement_pass and contradiction_pass,
+    }
+
+
+def _score_aziridinium_conclusion(
+    conclusion: str,
+    case: DiscoveryBlindCase,
+    *,
+    queried_experiment_ids: list[str],
+) -> dict[str, Any]:
+    normalized = " ".join((conclusion or "").lower().split())
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", normalized)
+        if sentence.strip()
+    ]
+    outcome_matches = [
+        any(term.lower() in normalized for term in group)
+        for group in case.outcome_claim_groups
+    ]
+
+    h2_positive = any(re.search(
+        r"(?:\bh2\b.{0,35}(?:support|select|favor|mechanism)|"
+        r"(?:support|select|choose|favor)\w*.{0,15}\bh2\b|"
+        r"(?:mechanism|hypothesis)\s*(?:is|:)\s*h2|"
+        r"(?:stepwise\s+)?mechanism\s*\(\s*h2\s*\)|"
+        r"(?:proceed|occur)\w*\s+via\s+h2)",
+        sentence,
+    ) for sentence in sentences)
+    h2_negative = any(re.search(
+        r"\bh2\b.{0,35}(?:reject|ruled out|incorrect|false|not supported|lacks? support)",
+        sentence,
+    ) for sentence in sentences)
+    competing_selected = any(
+        re.search(
+            r"(?:\bh[13]\b.{0,20}(?:is|as)\s+(?:the )?(?:supported|selected|favored|correct|dominant)|"
+            r"\bh[13]\b.{0,20}mechanism.{0,15}(?:is )?supported|"
+            r"(?:support|select|choose|favor)\w*.{0,15}\bh[13]\b|"
+            r"(?:mechanism|hypothesis)\s*(?:is|:)\s*h[13])",
+            sentence,
+        )
+        and not re.search(
+            r"(?:falsif|rule[sd]? out|reject|not support).{0,70}\bh[13]\b|"
+            r"\bh[13]\b.{0,70}(?:falsif|rule[sd]? out|reject|not supported)",
+            sentence,
+        )
+        for sentence in sentences
+    )
+    outcome_pass = h2_positive and not h2_negative and not competing_selected
+
+    aziridinium_pattern = r"aziridinium"
+    migration_pattern = r"(?:1,2[- ]migration|1,2-migration|migration)"
+    stepwise_sentences = [
+        sentence for sentence in sentences
+        if re.search(aziridinium_pattern, sentence) and re.search(migration_pattern, sentence)
+    ]
+    correct_step_order = any(
+        (
+            re.search(
+                rf"(?:rapid|fast|quick)\w*.{{0,180}}(?:form|generat|accumulat)\w*.{{0,35}}"
+                rf"{aziridinium_pattern}",
+                sentence,
+            )
+            and re.search(
+                rf"{aziridinium_pattern}.{{0,180}}(?:before|preced|followed by).{{0,70}}"
+                rf"(?:slow|slower)?\w*.{{0,25}}{migration_pattern}",
+                sentence,
+            )
+        )
+        or re.search(
+            rf"{aziridinium_pattern}.{{0,55}}(?:form|accumulat)\w*.{{0,80}}"
+            rf"(?:before|preced|followed by).{{0,45}}(?:slow|slower)?\w*.{{0,20}}{migration_pattern}",
+            sentence,
+        )
+        or re.search(
+            rf"{aziridinium_pattern}.{{0,80}}(?:which )?(?:(?:then|subsequently) )?.{{0,20}}"
+            rf"(?:undergo\w*.{{0,20}})?(?:slow|slower)\w*.{{0,30}}{migration_pattern}",
+            sentence,
+        )
+        for sentence in stepwise_sentences
+    )
+    if not correct_step_order:
+        transient_precedes_product = any(
+            re.search(r"(?:transient|intermediate).{0,45}accumulat\w*.{0,45}before.{0,30}product", sentence)
+            for sentence in sentences
+        )
+        transient_linked_to_aziridinium = any(
+            "aziridinium" in sentence and re.search(r"(?:transient|ir band|spectrum|spectral)", sentence)
+            for sentence in sentences
+        )
+        migration_from_aziridinium = any(
+            "aziridinium" in sentence
+            and "backside" in sentence
+            and re.search(migration_pattern, sentence)
+            for sentence in sentences
+        )
+        correct_step_order = (
+            transient_precedes_product
+            and transient_linked_to_aziridinium
+            and migration_from_aziridinium
+        )
+    reversed_step_order = any(
+        re.search(
+            rf"{migration_pattern}.{{0,70}}(?:before|preced)\w*.{{0,45}}{aziridinium_pattern}",
+            sentence,
+        )
+        or re.search(
+            rf"{aziridinium_pattern}.{{0,50}}(?:after|subsequent to).{{0,45}}{migration_pattern}",
+            sentence,
+        )
+        for sentence in stepwise_sentences
+    )
+
+    transient_sentences = [
+        sentence for sentence in sentences
+        if re.search(r"(?:transient|ir band|infrared|spectrum|spectral|cm-?1)", sentence)
+        and "aziridinium" in sentence
+    ]
+    transient_assignment_negated = any(
+        re.search(
+            r"(?:not|does not|doesn't|fails? to).{0,45}(?:assign|identify|match|support)|"
+            r"(?:transient|band).{0,45}(?:is not|isn't).{0,20}aziridinium",
+            sentence,
+        )
+        and not any(term in sentence for term in (
+            "falsif", "would challenge", "would contradict", "would refute", "would rule out",
+        ))
+        for sentence in transient_sentences
+    )
+    has_transient_assignment = any(
+        re.search(r"(?:assign|identify|match|align|consistent|support)\w*", sentence)
+        for sentence in transient_sentences
+    ) and not transient_assignment_negated
+
+    has_backside_anti = any(
+        "backside" in sentence and "anti" in sentence and re.search(migration_pattern, sentence)
+        for sentence in sentences
+    )
+    wrong_stereochemical_direction = any(
+        (
+            ("frontside" in sentence and re.search(r"(?:explain|give|yield|produce)\w*.{0,30}anti", sentence))
+            or (re.search(r"\bsyn\b", sentence) and re.search(r"(?:product|selectiv|addition|migration)", sentence))
+        )
+        and not any(term in sentence for term in (
+            "falsif", "would challenge", "would contradict", "would refute", "would rule out",
+        ))
+        for sentence in sentences
+    )
+
+    dpph_sentences = [sentence for sentence in sentences if "dpph" in sentence]
+    has_low_effective_dpph = any(
+        re.search(
+            r"(?:low|lower|limited).{0,25}(?:effective )?concentration|"
+            r"sparingly soluble|poorly soluble|sparing solubility",
+            sentence,
+        )
+        for sentence in dpph_sentences
+    )
+    dpph_before_amine = any(
+        re.search(
+            r"(?:dpph.{0,45}(?:consum|deplet|disappear)\w*.{0,55}(?:before|prior to).{0,35}(?:free )?amine|"
+            r"(?:consum|deplet)\w*.{0,25}dpph.{0,55}(?:before|prior to).{0,35}(?:free )?amine)",
+            sentence,
+        )
+        for sentence in dpph_sentences
+    )
+    has_overreaction_suppression = any(
+        re.search(
+            r"(?:prevent|avoid|limit|suppress|minimi)\w*.{0,45}(?:overreaction|side reaction|further reaction)|"
+            r"suppression of.{0,35}(?:overreaction|side reaction).{0,25}(?:explain|arise|result)",
+            sentence,
+        )
+        for sentence in sentences
+    )
+    dpph_overlap_claimed = any(
+        re.search(
+            r"dpph.{0,35}(?:remain|persist|present).{0,45}(?:with|after|while).{0,35}(?:free )?amine|"
+            r"dpph.{0,45}(?:not|never|isn't|is not).{0,20}(?:consum|deplet)",
+            sentence,
+        )
+        for sentence in dpph_sentences
+    )
+    suppression_negated = any(re.search(
+        r"(?:overreaction|side reaction).{0,25}(?:not|isn't|is not).{0,20}(?:prevent|avoid|limit|suppress)|"
+        r"(?:not|does not|doesn't|fails? to).{0,35}(?:prevent|avoid|limit|suppress).{0,35}(?:overreaction|side reaction)",
+        sentence,
+    ) for sentence in sentences)
+
+    has_uncertainty = any(
+        term in normalized for term in ("uncertainty", "uncertain", "confidence", "limitation")
+    )
+    has_falsifier = any(
+        term in normalized for term in ("falsif", "would contradict", "would refute", "would rule out")
+    )
+    mechanism_matches = [
+        correct_step_order and not reversed_step_order,
+        has_transient_assignment,
+        has_backside_anti and not wrong_stereochemical_direction,
+        dpph_before_amine and not dpph_overlap_claimed,
+        has_low_effective_dpph and has_overreaction_suppression and not suppression_negated,
+        has_uncertainty,
+        has_falsifier,
+    ]
+    mechanism_pass = all(mechanism_matches)
+
+    contradictions = [
+        phrase for phrase in case.contradiction_phrases if phrase.lower() in normalized
+    ]
+    if h2_negative:
+        contradictions.append("H2 explicitly rejected")
+    if competing_selected:
+        contradictions.append("H1 or H3 selected")
+    if reversed_step_order:
+        contradictions.append("migration incorrectly precedes aziridinium formation")
+    if transient_assignment_negated:
+        contradictions.append("aziridinium transient assignment explicitly negated")
+    if wrong_stereochemical_direction:
+        contradictions.append("frontside or syn stereochemical direction asserted")
+    if dpph_overlap_claimed:
+        contradictions.append("DPPH incorrectly persists with free amine")
+    if suppression_negated:
+        contradictions.append("overreaction suppression explicitly negated")
+
     queried = sorted({item for item in queried_experiment_ids if item in case.experiments})
     measurement_pass = len(queried) >= case.min_experiments
     contradiction_pass = not contradictions
@@ -674,8 +928,12 @@ def analyze_research_events(events: list[Any]) -> dict[str, Any]:
     risk_tools = {
         "check_patent", "functional_groups", "molecule_properties", "map_reaction",
         "chemical_critic", "design_experiments", "build_research_report", "research_memory",
+        "build_route_portfolio", "validate_route_portfolio",
     }
-    validation_tools = {"evaluate", "check_stock", "recommend_conditions", "map_reaction", "score_routes"}
+    validation_tools = {
+        "evaluate", "check_stock", "recommend_conditions", "map_reaction", "score_routes",
+        "select_experiment", "update_hypotheses", "validate_route_portfolio",
+    }
     closed_loop = score_closed_loop_events(rows)
     return {
         "event_count": len(rows),
@@ -804,6 +1062,69 @@ def score_closed_loop_events(events: list[Any]) -> dict[str, bool]:
         "failure_evidence_cited": failure_evidence_cited,
     }
     metrics["closed_loop_pass"] = all(metrics.values())
+    return metrics
+
+
+def score_discovery_v3_events(events: list[Any]) -> dict[str, Any]:
+    """Score whether a trajectory demonstrates the active route-discovery loop."""
+    rows = [_event_dict(event) for event in events]
+    hypothesis_ids = {
+        str(row.get("payload", {}).get("id"))
+        for row in rows if row.get("type") == "hypothesis_proposed"
+    }
+    selections = [
+        row.get("payload", {}) for row in rows if row.get("type") == "experiment_selected"
+    ]
+    posterior_updates = [
+        row.get("payload", {})
+        for row in rows if row.get("type") == "hypothesis_posterior_updated"
+    ]
+    portfolios = [
+        row.get("payload", {}) for row in rows if row.get("type") == "route_portfolio_built"
+    ]
+    validations = [
+        row.get("payload", {}) for row in rows if row.get("type") == "route_validated"
+    ]
+    completions = [row.get("payload", {}) for row in rows if row.get("type") == "research_completed"]
+    evidence_ids = {
+        str(row.get("payload", {}).get("id"))
+        for row in rows if row.get("type") == "evidence_added"
+    }
+    latest_updates: dict[str, dict[str, Any]] = {}
+    for update in posterior_updates:
+        latest_updates[str(update.get("id", ""))] = update
+    posterior_sum = sum(
+        float(update.get("posterior_probability", 0.0) or 0.0)
+        for update in latest_updates.values()
+    )
+    validated_routes = {
+        str(report.get("id")) for report in validations if report.get("status") == "passed"
+    }
+    completion_grounded = any(
+        bool({str(item) for item in completion.get("target_ids", [])}.intersection(validated_routes))
+        and bool(completion.get("evidence_ids"))
+        and {str(item) for item in completion.get("evidence_ids", [])}.issubset(evidence_ids)
+        for completion in completions
+    )
+    metrics = {
+        "competing_hypotheses": len(hypothesis_ids) >= 2,
+        "information_gain_selection": any(
+            int(item.get("rank", 0) or 0) == 1
+            and float(item.get("expected_information_gain", 0.0) or 0.0) > 0
+            for item in selections
+        ),
+        "posterior_updated": (
+            len(latest_updates) >= 2
+            and abs(posterior_sum - 1.0) <= 1e-6
+            and any(float(item.get("entropy_reduction", 0.0) or 0.0) > 0 for item in latest_updates.values())
+        ),
+        "multi_source_portfolio": any(
+            int(item.get("multi_source_route_count", 0) or 0) >= 1 for item in portfolios
+        ),
+        "independent_validation": bool(validated_routes),
+        "validated_completion": completion_grounded,
+    }
+    metrics["discovery_v3_pass"] = all(metrics.values())
     return metrics
 
 

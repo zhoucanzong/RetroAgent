@@ -102,6 +102,28 @@ class ResearchStateTests(unittest.TestCase):
         self.assertEqual(observation["routes"][0]["id"], "route_a")
         self.assertNotIn("raw_events", observation)
 
+    def test_replay_tracks_discovery_v3_decisions_and_validation(self):
+        ledger = ResearchLedger()
+        ledger.append("hypothesis_proposed", {"id": "h1", "claim": "path one"})
+        ledger.append("experiment_selected", {"id": "exp_1", "rank": 1})
+        ledger.append("hypothesis_posterior_updated", {
+            "id": "h1", "posterior_probability": 0.8, "posterior_entropy": 0.72,
+        })
+        ledger.append("route_registered", {"id": "route_1", "source_count": 2})
+        ledger.append("route_portfolio_built", {"multi_source_route_count": 1})
+        ledger.append("route_validated", {
+            "id": "route_1", "report_id": "validation_route_1", "status": "passed",
+            "confidence": 1.0,
+        })
+
+        state = ledger.replay()
+        observation = state.to_observation()
+
+        self.assertEqual(state.experiments["exp_1"]["status"], "selected")
+        self.assertEqual(state.hypotheses["h1"]["posterior_probability"], 0.8)
+        self.assertEqual(state.routes["route_1"]["validation_status"], "passed")
+        self.assertEqual(observation["route_validations"][0]["report_id"], "validation_route_1")
+
     def test_observation_summarizes_large_evidence_result_without_mutating_ledger(self):
         ledger = ResearchLedger()
         ledger.append("evidence_added", {

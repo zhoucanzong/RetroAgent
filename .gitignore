@@ -20,4 +20,8 @@ papers
 ChemMCP-main
 CHEMMCP_INTEGRATION.md
 logs/
+.retroagent/
+*.egg-info/
+build/
+dist/
 .superpowers/

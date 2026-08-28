@@ -7,6 +7,10 @@ from pathlib import Path
 from retroagent.agents.discovery_controller import DiscoveryController
 from retroagent.research_execution import PermissionGrant, PermissionMode
 from retroagent.research_state import ResearchLedger
+from retroagent.benchmark import score_discovery_v3_events
+from retroagent.environments import RetroEnvironment
+from retroagent.tools.active_learning import BeliefUpdaterTool, ExperimentSelectorTool
+from retroagent.tools.route_discovery import IndependentRouteValidatorTool, RoutePortfolioTool
 
 
 def _decision(action_type, action, target_ids, *, stop=False, conclusion="", evidence_ids=None):
@@ -839,6 +843,101 @@ class DiscoveryControllerTests(unittest.TestCase):
 
         self.assertEqual(result["exit_status"], "Submitted")
         self.assertTrue(any(event.type == "action_failed" for event in result["events"]))
+
+    def test_discovery_v3_runs_active_learning_to_validated_novel_route(self):
+        hypotheses = [
+            {"id": "H1", "posterior_probability": 0.5},
+            {"id": "H2", "posterior_probability": 0.5},
+        ]
+        reaction = {
+            "id": "rxn_ester",
+            "product_smiles": "CCOC(=O)C",
+            "precursor_smiles_list": ["CCO", "CC(=O)O"],
+        }
+        route_candidates = [
+            {"id": "route_novel", "source": "template", "score": 0.72, "reactions": [reaction]},
+            {"id": "route_novel", "source": "mechanism", "score": 0.82, "reactions": [reaction]},
+        ]
+        model = _ScriptedModel([
+            _decision("tool", {"tool": "select_experiment", "parameters": {
+                "hypotheses": hypotheses,
+                "experiments": [{
+                    "id": "exp_kinetic_probe",
+                    "outcomes": {
+                        "fast": {"H1": 0.9, "H2": 0.1},
+                        "slow": {"H1": 0.1, "H2": 0.9},
+                    },
+                    "cost": {"time_minutes": 15},
+                }],
+            }}, ["H1", "H2"]),
+            _decision("tool", {"tool": "update_hypotheses", "parameters": {
+                "hypotheses": hypotheses,
+                "likelihoods": {"H1": 0.1, "H2": 0.9},
+                "experiment_id": "exp_kinetic_probe",
+                "observation": "slow",
+            }}, ["H1", "H2"]),
+            _decision("tool", {"tool": "build_route_portfolio", "parameters": {
+                "target_smiles": "CCOC(=O)C",
+                "candidates": route_candidates,
+                "known_reactions": ["CCBr.O>>CCO"],
+            }}, ["H2"]),
+            _decision("tool", {"tool": "validate_route_portfolio", "parameters": {
+                "target_smiles": "CCOC(=O)C",
+                "routes": [{
+                    "id": "route_novel", "target_smiles": "CCOC(C)=O",
+                    "source_count": 2, "sources": ["mechanism", "template"],
+                    "novelty_score": 0.5, "reactions": [reaction],
+                }],
+                "mapping_reports": [{
+                    "reaction_id": "rxn_ester", "confidence": 0.91,
+                    "mapped_reaction": "[CH3:1][CH2:2][OH:3].[CH3:4][C:5](=[O:6])[OH:7]>>CCOC(=O)C",
+                }],
+                "forward_predictions": [{
+                    "reaction_id": "rxn_ester", "predicted_product": "CCOC(=O)C", "confidence": 0.84,
+                }],
+                "condition_reports": [{
+                    "reaction_id": "rxn_ester", "reagent": "DCC", "solvent": "CH2Cl2", "temperature": 20,
+                }],
+                "stock_hits": {"CCO": True, "CC(=O)O": True},
+                "strict": True,
+            }}, ["route_novel"]),
+            _decision(
+                "stop", {}, ["route_novel"], stop=True,
+                conclusion="Route novel passed the independent evidence gate after H2 gained posterior support.",
+                evidence_ids=["evidence_0004"],
+            ),
+        ])
+        ledger = ResearchLedger()
+        ledger.append("goal_set", {
+            "task": "discover and validate a new route",
+            "discovery_v3": {
+                "min_competing_hypotheses": 2,
+                "max_posterior_entropy": 0.5,
+                "min_route_novelty": 0.1,
+                "require_multi_source_route": True,
+                "require_independent_validation": True,
+            },
+        })
+        for hypothesis in hypotheses:
+            ledger.append("hypothesis_proposed", hypothesis)
+        env = RetroEnvironment(include_bash=False)
+        env.register("select_experiment", ExperimentSelectorTool())
+        env.register("update_hypotheses", BeliefUpdaterTool())
+        env.register("build_route_portfolio", RoutePortfolioTool())
+        env.register("validate_route_portfolio", IndependentRouteValidatorTool())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = DiscoveryController(
+                model, env, ledger=ledger, workspace=tmp, max_cycles=6,
+                allow_execution_tools=False,
+            ).run("discover and validate a new route")
+
+        state = ledger.replay()
+        metrics = score_discovery_v3_events(result["trajectory"])
+        self.assertEqual(result["exit_status"], "Submitted")
+        self.assertAlmostEqual(state.hypotheses["H2"]["posterior_probability"], 0.9)
+        self.assertEqual(state.routes["route_novel"]["validation_status"], "passed")
+        self.assertTrue(metrics["discovery_v3_pass"], metrics)
 
 
 if __name__ == "__main__":

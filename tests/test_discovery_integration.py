@@ -128,10 +128,41 @@ class DiscoveryIntegrationTests(unittest.TestCase):
             rows = [json.loads(line) for line in (output_dir / "results.jsonl").read_text().splitlines()]
 
         self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["exit_status"], "DryRun")
         self.assertEqual(rows[0]["published_date"], "2026-07-15")
         self.assertEqual(rows[0]["metrics"]["registered_experiment_count"], 4)
         self.assertNotIn("expected_outcome", rows[0])
+
+    def test_blind_study_benchmark_can_dry_run_one_case_by_id(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "blind"
+            result = runner.invoke(app, [
+                "benchmark-discovery-blind",
+                "--cases", str(PROJECT_DIR / "benchmarks" / "blind_studies.jsonl"),
+                "--case-id", "boronate-amination-2026-002",
+                "--output-dir", str(output_dir),
+                "--dry-run",
+            ])
+            rows = [json.loads(line) for line in (output_dir / "results.jsonl").read_text().splitlines()]
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual([row["case_id"] for row in rows], ["boronate-amination-2026-002"])
+
+    def test_blind_study_benchmark_rejects_unknown_case_id(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            result = runner.invoke(app, [
+                "benchmark-discovery-blind",
+                "--cases", str(PROJECT_DIR / "benchmarks" / "blind_studies.jsonl"),
+                "--case-id", "not-a-case",
+                "--output-dir", str(Path(tmp) / "blind"),
+                "--dry-run",
+            ])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Unknown blind case id", result.output)
 
     def test_blind_study_environment_excludes_answer_leaking_tools(self):
         case = load_blind_cases(PROJECT_DIR / "benchmarks" / "blind_studies.jsonl")[0]
@@ -159,6 +190,37 @@ class DiscoveryIntegrationTests(unittest.TestCase):
                 allow_execution_tools=False,
             )
         self.assertEqual({tool["name"] for tool in controller._tools_spec()}, names)
+
+    def test_discovery_v3_trajectory_cli_scores_event_contract(self):
+        events = [
+            {"type": "hypothesis_proposed", "payload": {"id": "H1"}},
+            {"type": "hypothesis_proposed", "payload": {"id": "H2"}},
+            {"type": "evidence_added", "payload": {"id": "evidence_1"}},
+            {"type": "experiment_selected", "payload": {
+                "id": "exp_1", "rank": 1, "expected_information_gain": 0.5,
+            }},
+            {"type": "hypothesis_posterior_updated", "payload": {
+                "id": "H1", "posterior_probability": 0.2, "entropy_reduction": 0.3,
+            }},
+            {"type": "hypothesis_posterior_updated", "payload": {
+                "id": "H2", "posterior_probability": 0.8, "entropy_reduction": 0.3,
+            }},
+            {"type": "route_portfolio_built", "payload": {"multi_source_route_count": 1}},
+            {"type": "route_validated", "payload": {"id": "route_1", "status": "passed"}},
+            {"type": "research_completed", "payload": {
+                "target_ids": ["route_1"], "evidence_ids": ["evidence_1"],
+            }},
+        ]
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            trajectory = Path(tmp) / "trajectory.json"
+            trajectory.write_text(json.dumps(events), encoding="utf-8")
+            result = runner.invoke(app, [
+                "score-discovery-v3", str(trajectory), "--require-pass",
+            ])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue(json.loads(result.output)["discovery_v3_pass"])
 
     def test_event_metrics_prove_failure_driven_replanning(self):
         events = [

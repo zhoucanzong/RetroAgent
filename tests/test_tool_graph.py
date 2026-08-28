@@ -21,6 +21,10 @@ class ToolGraphTests(unittest.TestCase):
             "map_reaction",
             "chemical_critic",
             "design_experiments",
+            "select_experiment",
+            "update_hypotheses",
+            "build_route_portfolio",
+            "validate_route_portfolio",
             "build_research_report",
             "research_memory",
             "think",
@@ -32,6 +36,9 @@ class ToolGraphTests(unittest.TestCase):
         self.assertIn("chemical_critic", next_tools("map_reaction", available))
         self.assertIn("design_experiments", next_tools("chemical_critic", available))
         self.assertIn("build_research_report", next_tools("design_experiments", available))
+        self.assertEqual(next_tools("select_experiment", available), ["update_hypotheses"])
+        self.assertEqual(next_tools("build_route_portfolio", available), ["validate_route_portfolio"])
+        self.assertIn("build_research_report", next_tools("validate_route_portfolio", available))
         self.assertEqual(next_tools("build_research_report", available), ["research_memory", "think"])
 
     def test_tool_graph_summary_contains_dependencies(self):

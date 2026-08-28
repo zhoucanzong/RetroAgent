@@ -17,6 +17,7 @@ from retroagent.benchmark import (
     run_discovery_cases,
     score_blind_conclusion,
     score_closed_loop_events,
+    score_discovery_v3_events,
     write_jsonl,
 )
 from retroagent.blackboard import SharedBlackboard
@@ -48,6 +49,8 @@ from retroagent.tools.research_report import ResearchReportTool
 from retroagent.tools.route_scorer import RouteScorerTool
 from retroagent.tools.feedback_oracle import FeedbackOracleTool
 from retroagent.tools.blind_study_oracle import BlindStudyOracleTool
+from retroagent.tools.active_learning import BeliefUpdaterTool, ExperimentSelectorTool
+from retroagent.tools.route_discovery import IndependentRouteValidatorTool, RoutePortfolioTool
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -267,6 +270,10 @@ def _build_environment() -> RetroEnvironment:
     env.register("design_experiments", ExperimentDesignerTool())  # critic issue -> validation plan
     env.register("build_research_report", ResearchReportTool())  # discovery hypothesis schema audit
     env.register("research_memory", ResearchMemoryTool())   # local JSONL discovery memory
+    env.register("select_experiment", ExperimentSelectorTool())
+    env.register("update_hypotheses", BeliefUpdaterTool())
+    env.register("build_route_portfolio", RoutePortfolioTool())
+    env.register("validate_route_portfolio", IndependentRouteValidatorTool())
 
     return env
 
@@ -368,6 +375,11 @@ def run(
     ledger_output: Path | None = typer.Option(
         None, "--ledger-output", help="Optional append-only discovery event ledger JSONL",
     ),
+    discovery_v3: bool = typer.Option(
+        False, "--discovery-v3", help="Require active experiment selection and independent route validation",
+    ),
+    max_posterior_entropy: float = typer.Option(0.65, "--max-posterior-entropy", min=0.0),
+    min_route_novelty: float = typer.Option(0.1, "--min-route-novelty", min=0.0, max=1.0),
 ) -> None:
     """Run LLM-driven planning or design on a target SMILES / constraints."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
@@ -413,6 +425,20 @@ def run(
     except ValueError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(2) from exc
+
+    if mode == "discovery" and discovery_v3 and not agent.ledger.replay().goal:
+        agent.ledger.append("goal_set", {
+            "task": task,
+            "discovery_v3": {
+                "min_competing_hypotheses": 2,
+                "require_active_experiment_selection": True,
+                "require_posterior_update": True,
+                "max_posterior_entropy": max_posterior_entropy,
+                "require_multi_source_route": True,
+                "min_route_novelty": min_route_novelty,
+                "require_independent_validation": True,
+            },
+        }, actor="user", cycle=0)
 
     print(f"\n{'='*60}")
     print(f"RetroAgent v0.1 — Mode: {mode}")
@@ -602,6 +628,30 @@ def benchmark_discovery(
     print(f"Results saved to: {result_path}")
 
 
+@app.command("score-discovery-v3")
+def score_discovery_v3(
+    trajectory: Path = typer.Argument(..., help="Discovery trajectory JSON or JSONL file"),
+    require_pass: bool = typer.Option(False, "--require-pass", help="Exit non-zero unless the full v3 loop passes"),
+) -> None:
+    """Score an existing trajectory for the active route-discovery contract."""
+    try:
+        raw = trajectory.read_text(encoding="utf-8")
+        if trajectory.suffix.lower() == ".jsonl":
+            events = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        else:
+            parsed = json.loads(raw)
+            events = parsed.get("trajectory", []) if isinstance(parsed, dict) else parsed
+        if not isinstance(events, list):
+            raise ValueError("trajectory must contain an event array")
+        metrics = score_discovery_v3_events(events)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(json.dumps(metrics, indent=2, sort_keys=True))
+    if require_pass and not metrics["discovery_v3_pass"]:
+        raise typer.Exit(3)
+
+
 @app.command("benchmark-discovery-feedback")
 def benchmark_discovery_feedback(
     cases: Path = typer.Option(
@@ -720,9 +770,18 @@ def benchmark_discovery_blind(
     api_key: str | None = typer.Option(None, "--api-key"),
     base_url: str | None = typer.Option(None, "--base-url"),
     max_cycles: int = typer.Option(16, "--max-cycles"),
+    case_id: str | None = typer.Option(
+        None,
+        "--case-id",
+        help="Run one blind case by id",
+    ),
 ) -> None:
     """Test whether discovery mode reaches a recent paper result from hidden measurements."""
     loaded_cases = load_blind_cases(cases)
+    if case_id is not None:
+        loaded_cases = [case for case in loaded_cases if case.id == case_id]
+        if not loaded_cases:
+            raise typer.BadParameter(f"Unknown blind case id: {case_id}", param_hint="--case-id")
     output_dir.mkdir(parents=True, exist_ok=True)
     cfg = get_config()
     rows = []
@@ -806,6 +865,11 @@ def benchmark_discovery_blind(
     if not dry_run:
         print(f"Blind passed: {passed}/{len(rows)}")
     print(f"Results saved to: {result_path}")
+
+
+from retroagent.cli_foundation import register_cli
+
+register_cli(app)
 
 
 if __name__ == "__main__":

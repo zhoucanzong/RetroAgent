@@ -33,7 +33,11 @@ command, or stop. State actions may propose_hypothesis or set_subgoal; they orga
 not count as evidence. Negative evidence must change the next action. Do not repeat an unchanged
 failed action. Recent schema or policy failures appear in state.recent_rejections; do not repeat a
 rejected action while the reason and permission state are unchanged. A stop decision must cite
-recorded evidence ids.
+recorded evidence ids. For discovery_v3 goals, keep at least two competing hypotheses, rank
+candidate experiments with select_experiment before measuring, update probabilities with
+update_hypotheses after an observation, combine genuinely different route generators with
+build_route_portfolio, and use validate_route_portfolio as an independent gate before selecting
+a route. Novelty is a scored uncertainty, never proof of feasibility.
 """
 
 
@@ -66,7 +70,10 @@ class DiscoveryController:
         if not self.ledger.replay().goal:
             self.ledger.append("goal_set", {"task": task}, actor="user", cycle=0)
 
-        for cycle in range(1, self.max_cycles + 1):
+        self._consume_approved_action()
+        base_cycle = max((event.cycle for event in self.ledger.events), default=0)
+
+        for cycle in range(base_cycle + 1, base_cycle + self.max_cycles + 1):
             state = self.ledger.replay()
             response = self.model.query(
                 [
@@ -103,7 +110,7 @@ class DiscoveryController:
                 )
                 continue
 
-            self.ledger.append("decision_made", decision, actor="agent", cycle=cycle)
+            decision_event = self.ledger.append("decision_made", decision, actor="agent", cycle=cycle)
             if decision["stop"] or decision["action_type"] == "stop":
                 invalid_reason = self._completion_error(decision)
                 if invalid_reason:
@@ -164,11 +171,13 @@ class DiscoveryController:
                         "approval_requested",
                         {
                             "action": policy_action,
+                            "decision": decision,
                             "required_scope": authorization.required_scope,
                             "reason": authorization.reason,
                         },
                         actor="controller",
                         cycle=cycle,
+                        causal_parent_id=decision_event.id,
                     )
                     return self._result(
                         "AwaitingApproval",
@@ -215,6 +224,90 @@ class DiscoveryController:
             self._assimilate(result, action, decision, cycle)
 
         return self._result("StepLimit", error=f"Discovery cycle limit reached: {self.max_cycles}")
+
+    def _consume_approved_action(self) -> None:
+        requests = {event.id: event for event in self.ledger.events if event.type == "approval_requested"}
+        consumed = {
+            event.causal_parent_id
+            for event in self.ledger.events
+            if event.type == "approval_consumed" and event.causal_parent_id
+        }
+        denied_requests = {
+            event.causal_parent_id
+            for event in self.ledger.events
+            if event.type == "approval_denied" and event.causal_parent_id
+        }
+        approved = [
+            event for event in self.ledger.events
+            if event.type == "approval_granted"
+            and event.id not in consumed
+            and event.causal_parent_id in requests
+            and event.causal_parent_id not in denied_requests
+        ]
+        if not approved:
+            return
+        grant_event = approved[-1]
+        request_event = requests[grant_event.causal_parent_id]
+        decision = request_event.payload.get("decision")
+        if not isinstance(decision, dict):
+            self.ledger.append(
+                "decision_rejected",
+                {"reason": "approved request has no resumable decision"},
+                actor="controller",
+                causal_parent_id=grant_event.id,
+            )
+            return
+        try:
+            action = _execution_action(decision)
+            action_type = str(decision["action_type"])
+        except (KeyError, TypeError, ValueError) as exc:
+            self.ledger.append(
+                "decision_rejected",
+                {"reason": f"approved request is invalid: {exc}", "decision": decision},
+                actor="controller",
+                causal_parent_id=grant_event.id,
+            )
+            return
+        cycle = max((event.cycle for event in self.ledger.events), default=0) + 1
+        self.ledger.append(
+            "approval_consumed",
+            {"request_event_id": request_event.id, "action": action, "one_time": True},
+            actor="controller",
+            cycle=cycle,
+            causal_parent_id=grant_event.id,
+        )
+        estimated = decision.get("estimated_cost", {})
+        estimated_minutes = float(estimated.get("time_minutes", 0) or 0)
+        self.ledger.append(
+            "budget_charged",
+            {"time_minutes": estimated_minutes, "action": action},
+            actor="controller",
+            cycle=cycle,
+        )
+        self.ledger.append(
+            "execution_started",
+            {"action": action, "approved_request_id": request_event.id},
+            actor="controller",
+            cycle=cycle,
+        )
+        try:
+            result = self._execute(action_type, action)
+            if not isinstance(result, dict):
+                raise TypeError(f"executor returned {type(result).__name__}, expected dict")
+        except Exception as exc:
+            result = {
+                "status": "failed",
+                "returncode": -1,
+                "output": json.dumps({"error": str(exc)}),
+                "exception_info": f"{type(exc).__name__}: {exc}",
+            }
+        self.ledger.append(
+            "execution_finished",
+            {"action": action, "result": result, "approved_request_id": request_event.id},
+            actor="executor",
+            cycle=cycle,
+        )
+        self._assimilate(result, action, decision, cycle)
 
     def _execute(self, action_type: str, action: dict[str, Any]) -> dict[str, Any]:
         if action_type == "tool":
@@ -337,6 +430,62 @@ class DiscoveryController:
             actor="assimilator",
             cycle=cycle,
         )
+        tool_name = str(action.get("tool", "")) if decision["action_type"] == "tool" else ""
+        if isinstance(data, dict) and result.get("returncode", 0) == 0:
+            if tool_name == "select_experiment":
+                selected = data.get("selected_experiment")
+                if isinstance(selected, dict) and selected.get("id"):
+                    self.ledger.append(
+                        "experiment_selected",
+                        {**selected, "id": str(selected["id"]), "evidence_id": evidence_id},
+                        actor="assimilator",
+                        cycle=cycle,
+                        causal_parent_id=evidence_event.id,
+                    )
+            elif tool_name == "update_hypotheses":
+                for update in data.get("hypothesis_updates", []):
+                    if isinstance(update, dict) and update.get("id"):
+                        self.ledger.append(
+                            "hypothesis_posterior_updated",
+                            {
+                                **update,
+                                "id": str(update["id"]),
+                                "posterior_entropy": data.get("posterior_entropy"),
+                                "entropy_reduction": data.get("entropy_reduction"),
+                                "evidence_id": evidence_id,
+                            },
+                            actor="assimilator",
+                            cycle=cycle,
+                            causal_parent_id=evidence_event.id,
+                        )
+            elif tool_name == "build_route_portfolio":
+                portfolio = data.get("route_portfolio")
+                if isinstance(portfolio, dict):
+                    self.ledger.append(
+                        "route_portfolio_built",
+                        {**portfolio, "evidence_id": evidence_id},
+                        actor="assimilator",
+                        cycle=cycle,
+                        causal_parent_id=evidence_event.id,
+                    )
+            elif tool_name == "validate_route_portfolio":
+                for report in data.get("validation_reports", []):
+                    if isinstance(report, dict) and report.get("route_id"):
+                        self.ledger.append(
+                            "route_validated",
+                            {
+                                "id": str(report["route_id"]),
+                                "report_id": str(report.get("id", "")),
+                                "status": str(report.get("status", "needs-evidence")),
+                                "confidence": float(report.get("confidence", 0.0) or 0.0),
+                                "checks": list(report.get("checks", [])),
+                                "issues": list(report.get("issues", [])),
+                                "evidence_id": evidence_id,
+                            },
+                            actor="assimilator",
+                            cycle=cycle,
+                            causal_parent_id=evidence_event.id,
+                        )
         failed = result.get("returncode", 0) != 0 or result.get("status") in {"failed", "timed_out"}
         if failed:
             fingerprint = action_fingerprint(action)
@@ -390,6 +539,35 @@ class DiscoveryController:
         if failed_targets:
             return f"completion selects failed routes: {', '.join(failed_targets)}"
         selected_targets = {str(item) for item in decision.get("target_ids", [])}
+        discovery_v3 = state.goal.get("discovery_v3")
+        if isinstance(discovery_v3, dict) and discovery_v3:
+            min_hypotheses = int(discovery_v3.get("min_competing_hypotheses", 2))
+            if len(state.hypotheses) < min_hypotheses:
+                return f"discovery_v3 requires at least {min_hypotheses} competing hypotheses"
+            if discovery_v3.get("require_active_experiment_selection", True) and not state.experiment_selections:
+                return "discovery_v3 requires information-gain experiment selection"
+            if discovery_v3.get("require_posterior_update", True) and not state.hypothesis_posterior_updates:
+                return "discovery_v3 requires an evidence-driven posterior update"
+            max_entropy = discovery_v3.get("max_posterior_entropy")
+            if max_entropy is not None and state.hypothesis_posterior_updates:
+                entropy = state.hypothesis_posterior_updates[-1].get("posterior_entropy")
+                if entropy is None or float(entropy) > float(max_entropy):
+                    return f"discovery_v3 posterior entropy exceeds {float(max_entropy):g}"
+            selected_routes = [state.routes[item] for item in selected_targets if item in state.routes]
+            if not selected_routes:
+                return "discovery_v3 completion must select at least one recorded route"
+            if discovery_v3.get("require_multi_source_route", True) and not any(
+                int(route.get("source_count", len(route.get("sources", []))) or 0) >= 2
+                for route in selected_routes
+            ):
+                return "discovery_v3 requires a route supported by multiple generator sources"
+            min_novelty = float(discovery_v3.get("min_route_novelty", 0.0) or 0.0)
+            if not any(float(route.get("novelty_score", 0.0) or 0.0) >= min_novelty for route in selected_routes):
+                return f"discovery_v3 selected route novelty is below {min_novelty:g}"
+            if discovery_v3.get("require_independent_validation", True) and not any(
+                route.get("validation_status") == "passed" for route in selected_routes
+            ):
+                return "discovery_v3 requires an independently validated selected route"
         relevant = bool(
             not state.routes
             and any(not state.evidence[evidence_id].get("target_ids") for evidence_id in evidence_ids)

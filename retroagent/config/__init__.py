@@ -25,9 +25,10 @@ _CONFIG_DIR = Path(__file__).resolve().parent
 _DEFAULT_CONFIG = _CONFIG_DIR / "default.yaml"
 _LOCAL_CONFIG = _CONFIG_DIR / "config.local.yaml"
 
-# Project root is retroagent package dir's parent
+# Source checkouts default to their local models directory. Installed CLI users can
+# point at separately downloaded weights with RETROAGENT_MODELS_DIR.
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
-MODELS_DIR = PROJECT_DIR / "models"
+MODELS_DIR = Path(os.environ.get("RETROAGENT_MODELS_DIR", PROJECT_DIR / "models")).expanduser().resolve()
 
 
 def _load_yaml(path: Path) -> dict:

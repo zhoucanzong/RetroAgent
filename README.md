@@ -143,8 +143,11 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 
 ```bash
 cd RetroAgent
-pip install -r requirements.txt
+pip install -e .
 ```
+
+安装后可直接运行 `retroagent --help`。只需依赖文件、不安装命令入口时仍可使用
+`pip install -r requirements.txt`。
 
 > 可选：在虚拟环境中安装以隔离依赖（`python3 -m venv .venv && source .venv/bin/activate`），但下面的示例均假设依赖已装好、直接用 `python3` 运行。
 
@@ -176,6 +179,7 @@ EOF
 export LLM_API_KEY="sk-..."
 export LLM_MODEL="gpt-4o"
 export LLM_BASE_URL="https://api.openai.com/v1"
+export RETROAGENT_MODELS_DIR="/absolute/path/to/RetroAgent/models"
 ```
 
 配置加载优先级：**环境变量 > `config.local.yaml` > `default.yaml`**。
@@ -183,6 +187,55 @@ export LLM_BASE_URL="https://api.openai.com/v1"
 ---
 
 ## 🛠️ 使用示例
+
+### Agent-native CLI
+
+RetroAgent 使用 `.retroagent/` 项目目录保存 manifest、append-only ledger、运行产物、视图和检查点。
+研究实体使用稳定地址，例如 `route:route_0001` 和 `evidence:evidence_0001`。
+
+```bash
+# 建立研究项目并查看机器可读命令契约
+retroagent project init ./my-research
+retroagent help --json
+retroagent tool list --json
+
+# 原子写入结构化初始状态；先 dry-run，再提交
+retroagent batch actions.json --project ./my-research --dry-run --json
+retroagent batch actions.json --project ./my-research --json
+
+# 启动主动发现循环：竞争假设、信息增益实验、后验更新、多来源路线与独立验证
+retroagent agent run "寻找并验证一条新的催化路线" --discovery-v3 --project ./my-research
+retroagent status --project ./my-research --json
+retroagent query evidence --project ./my-research --json
+retroagent view route:route_0001 --format html --project ./my-research
+
+# standard 模式下，高风险动作暂停；批准只适用于该次精确动作
+retroagent approve --project ./my-research
+retroagent agent resume --project ./my-research
+
+# 验证、快照和确定性回放
+retroagent validate --project ./my-research --strict --json
+retroagent checkpoint create --label before-experiment --project ./my-research
+retroagent replay --project ./my-research --json
+
+# 对保存的真实运行轨迹进行事件级闭环评分
+retroagent score-discovery-v3 trajectory.json --require-pass
+```
+
+`--discovery-v3` 会把完成契约写入 ledger。Agent 至少维护两个竞争假设，先按期望信息增益选择实验，
+观测后更新后验，并且只能提交具备多来源 provenance、最低 novelty 分数且通过独立验证门控的路线。
+novelty 表示相对参考反应的外推距离，不等同于反应可行性证明。
+
+`restricted / standard / full` 权限语义与 DiscoveryController 一致。`full` 必须显式配置非空
+scope；真实实验和外部系统动作不可回滚，`batch` 的原子性仅覆盖研究账本状态。
+
+同一能力 schema 可导出 Agent Skill，并通过内置 MCP stdio server 暴露：
+
+```bash
+retroagent capability skill -o /tmp/retroagent-skill/SKILL.md
+retroagent capability mcp --json
+retroagent mcp serve --project ./my-research
+```
 
 ### 1. 工具测试（无需 API key）
 

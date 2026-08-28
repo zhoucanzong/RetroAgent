@@ -290,3 +290,53 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
   - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
   - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --dry-run --output-dir /tmp/retroagent_blind_dryrun`
   - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --run --max-cycles 16 --output-dir logs/discovery_blind_benchmark_verified_final4`
+
+### 2026-07-22 第二篇论文严格盲测
+
+- 选择 2026-07-13 发表的 Nature Chemistry 论文 `Electrophilic amination-induced 1,2-boronate migration for the modular synthesis of beta-amino boronic esters`（DOI: `10.1038/s41557-026-02206-6`）。该 case 与 BET case 不重复，测试时间顺序、中间体光谱归属、anti 立体化学和不相容试剂的自限机制。
+- 冻结题面要求在 H1 协同 amination/migration、H2 快速 aziridinium 形成后慢速 backside 1,2-migration、H3 radical/ordinary aziridination 中选择；论文标题、DOI、H2、隐藏数值和评分 profile 不进入 Agent prompt。
+- 新增 `aziridinium_migration` 独立方向性 scorer，并保留 `photoreduction_post_set` 原 scorer；新增 `--case-id` 以便单独运行一个 blind case。Scorer 覆盖真实输出中的括号 H2、跨句时间顺序、反事实 falsifier、`asynchronous`/`syn` 边界和 H1/H3 被排除时的否定语义。
+- Prompt 增加通用 completion self-audit：停止前逐项核对题目要求与已记录证据，不得用无证据推测填补；同一测量中的多条必要观察必须带入结论；最终显式标记 `Uncertainty:` 和 `Falsification:`。
+- 首轮运行选择 reaction-progress IR、spectral assignment 和 computed energy surface，正确推出 H2，但漏选唯一解释 product overreaction 的 stereochemical/reagent controls，并无证据猜测 DPPH 行为，严格失败。
+- 后续独立运行开始主动选择 stereochemical/reagent controls。最终运行正确得到：1195 cm-1 transient 与 1193 cm-1 aziridinium 计算光谱匹配；transient 先于 product 积累；backside 1,2-migration 解释 anti stereoselectivity；DPPH 在 free amine 出现前被消耗；H1/H3 被排除，并给出 uncertainty 与 falsifier。
+- 最终能力边界：Agent 再次遗漏 controls 中 `DPPH sparingly soluble` 这一条，未完整说明低有效浓度与时间分离共同抑制 overreaction。按当前 scorer 独立重评：`outcome_pass=true`，7 个 mechanism groups 中 6 个通过，`measurement_pass=true`，`contradiction_pass=true`，`blind_pass=false`。本轮停止继续调 prompt，保留失败作为“机制推理正确、证据摘要完整性仍不稳定”的真实结果。
+- 最终轨迹位于忽略目录 `logs/discovery_blind_benchmark_boronate_final/`；实际只执行 `blind_study_oracle`，且 Agent-visible goal 未命中 source title、DOI、hidden numeric results、expected outcome 或 scoring profile。
+- 验证命令：
+
+  - `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`
+  - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
+  - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --dry-run --output-dir /tmp/retroagent_blind_two_case_dryrun`
+  - `.venv/bin/python -m retroagent.run.retro benchmark-discovery-blind --run --case-id boronate-amination-2026-002 --max-cycles 16 --output-dir logs/discovery_blind_benchmark_boronate_final`
+
+### 2026-08-28 Agent-native CLI Foundation
+
+- 参考 OfficeCLI 的 Agent-first 设计，将 RetroAgent 从 Python 启动入口扩展为可安装的 `retroagent` CLI；新增 `pyproject.toml`，支持 `pip install -e .`、`pipx`/`uvx` 风格调用。wheel 显式包含默认 YAML 配置，包版本统一为 `0.2.0`，非源码安装可用 `RETROAGENT_MODELS_DIR` 指向外部模型权重目录。
+- 新增 `.retroagent/` 项目工作区：版本化 manifest、append-only `ledger.jsonl`、`artifacts / cache / reports / runs / views / checkpoints` 分区。运行目录、egg-info 和构建产物已加入 `.gitignore`，不提交本地研究状态。
+- 新增稳定资源地址 `molecule / hypothesis / route / reaction / evidence / experiment : id`，以及 `status / events / view / query / explain / validate / replay` 命令；所有新命令支持统一 `--json` 成功/错误 envelope 和机器可读错误码。
+- 新增 schema 驱动的 `retroagent help --json`、`tool list --json`、Skill 导出和内置 MCP stdio bridge。CLI、`skills/retroagent/SKILL.md` 与 MCP tool description 使用同一个 capability registry，测试阻止漂移。
+- 新增 `agent run / resume / stop / status / approve / reject`。Controller 的 approval request 现在保存完整 decision 和因果父事件；用户批准后，resume 会先精确执行一次原 pending action、记录 `approval_consumed`，再让 Agent 基于新 Evidence 继续规划，不会把批准泛化成长期权限。
+- 新增项目化 `tool call`、`exec python`、`exec command`。standard 模式继续阻止高风险动作；用户可显式一次性 `--approve`，full 模式仍要求 manifest 中存在明确 scope。
+- 新增原子 `batch`：先在内存账本逐项重放和语义校验，全部成功后使用 fsync + `os.replace` 替换 ledger；`--dry-run` 不写状态。原子性只覆盖数字研究状态，不宣称回滚真实实验或外部操作。
+- 新增 `checkpoint create/list/diff/restore`。restore 前自动创建 backup checkpoint；`replay` 可从当前 ledger、checkpoint 或指定 event 截止点重建状态。
+- 新增 HTML/SVG/PNG 研究视图：路线图、RDKit 分子图、单条 Evidence、Evidence matrix、单个 Experiment 和 Experiment timeline。视图默认写入项目 `views/`，可作为审查和 CI artifact。
+- 新增 `tests/test_cli_foundation.py`，覆盖项目初始化、稳定寻址、查询、原子失败不落盘、检查点恢复、视图、JSON contract、权限、Skill/MCP schema 一致性，以及 approved action exactly-once resume。
+- 当前验证：`PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py'` 为 157 项通过；现有 DiscoveryController 和 ResearchLedger 定向回归 40 项通过。
+- 验证命令：
+  - `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  - `PYTHONPATH=. .venv/bin/python -m compileall -q retroagent tests`
+  - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro --help`
+  - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro help --json`
+  - `PYTHONPATH=. .venv/bin/python -m retroagent.run.retro project init /tmp/retroagent-cli-smoke --json`
+  - `.venv/bin/pip install -e . --no-deps`
+
+### 2026-08-29 Discovery Loop v3
+
+- 新增 `select_experiment`：在多个可证伪假设之间计算先验熵、每个实验的期望后验熵和期望信息增益，再按时间、材料、计算成本与风险调整效用；输出完整排序而非只给一个黑箱选择。
+- 新增 `update_hypotheses`：观测到实验结果后执行 Bayes 更新，记录归一化 posterior、likelihood ratio、posterior entropy 和 entropy reduction。Controller 只信任该内置工具产生的后验事件，普通工具不能伪造状态转换。
+- 新增 `build_route_portfolio`：合并 template、template-free、mechanism、analogy 等来源；用 RDKit canonical structure 去重，保留来源支持、模型分歧，并以 reaction fingerprint 相对已知参考集计算 novelty/extrapolation distance。
+- 新增 `validate_route_portfolio` 独立门控：不复用生成器评分，分别检查结构、目标覆盖、多来源支持、atom mapping、forward prediction、条件完整性和库存证据；矛盾为 `failed`，缺证据为 `needs-evidence`，全部必需检查通过才是 `passed`。
+- ResearchLedger 新增 `experiment_selected / hypothesis_posterior_updated / route_portfolio_built / route_validated` 事件，并在 observation、project replay 和稳定 JSON state 中暴露，完整研究过程可确定性重放。
+- DiscoveryController 对带 `goal.discovery_v3` 的任务执行硬停止契约：竞争假设数、主动实验选择、后验更新、最大后验熵、多来源路线、最低 novelty 与独立验证任一缺失都不允许提交。旧 discovery 与严格论文盲测默认不启用该契约，避免改变历史基准边界。
+- Agent-native CLI 新增 `agent run --discovery-v3`、`--max-posterior-entropy` 和 `--min-route-novelty`；旧入口 `run --mode discovery` 同样支持。新增 `score-discovery-v3 TRAJECTORY --require-pass`，按事件而非最终答案关键词评分六项闭环能力。
+- ToolGraph 已连接 `chemical_critic/design_experiments -> select_experiment -> update_hypotheses -> build_route_portfolio -> validate_route_portfolio -> report/memory`；四个新工具进入常规 Discovery 环境，但不进入现有 blind-study allowlist。
+- 新增单元与完整脚本 Agent 轨迹测试，覆盖实验效用排序、概率归一化、结构等价路线去重、novelty 估计、独立证据缺失/矛盾/通过三态、事件回放、CLI completion contract 和 v3 trajectory scorer。
