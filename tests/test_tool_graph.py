@@ -23,6 +23,8 @@ class ToolGraphTests(unittest.TestCase):
             "design_experiments",
             "select_experiment",
             "update_hypotheses",
+            "retrochimera_predict",
+            "ensemble_disconnections",
             "build_route_portfolio",
             "validate_route_portfolio",
             "build_research_report",
@@ -30,13 +32,24 @@ class ToolGraphTests(unittest.TestCase):
             "think",
         ]
 
-        self.assertEqual(next_tools("disconnect", available), ["propose", "think"])
-        self.assertEqual(next_tools("propose", available), ["evaluate", "score_routes", "map_reaction"])
+        self.assertEqual(
+            next_tools("disconnect", available),
+            ["propose", "ensemble_disconnections", "think"],
+        )
+        self.assertEqual(
+            next_tools("propose", available),
+            ["ensemble_disconnections", "evaluate", "score_routes", "map_reaction"],
+        )
         self.assertIn("chemical_critic", next_tools("score_routes", available))
         self.assertIn("chemical_critic", next_tools("map_reaction", available))
         self.assertIn("design_experiments", next_tools("chemical_critic", available))
         self.assertIn("build_research_report", next_tools("design_experiments", available))
         self.assertEqual(next_tools("select_experiment", available), ["update_hypotheses"])
+        self.assertIn("ensemble_disconnections", next_tools("retrochimera_predict", available))
+        self.assertEqual(
+            next_tools("ensemble_disconnections", available),
+            ["build_route_portfolio", "evaluate", "map_reaction"],
+        )
         self.assertEqual(next_tools("build_route_portfolio", available), ["validate_route_portfolio"])
         self.assertIn("build_research_report", next_tools("validate_route_portfolio", available))
         self.assertEqual(next_tools("build_research_report", available), ["research_memory", "think"])

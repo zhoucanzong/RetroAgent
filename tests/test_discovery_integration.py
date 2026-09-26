@@ -367,6 +367,54 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(metrics["scored_route_count"], 1)
         self.assertTrue(metrics["used_validation_tools"])
 
+    def test_event_analyzer_measures_retrosynthesis_ensemble_usage(self):
+        events = [
+            {"type": "execution_started", "payload": {
+                "action": {"tool": "retrochimera_predict", "parameters": {}},
+            }},
+            {"type": "execution_finished", "payload": {
+                "action": {"tool": "retrochimera_predict", "parameters": {}},
+                "result": {"returncode": 0, "output": json.dumps({
+                    "reactions": [{"id": "chimera_1", "precursor_smiles_list": ["CCO"]}],
+                })},
+            }},
+            {"type": "execution_started", "payload": {
+                "action": {"tool": "ensemble_disconnections", "parameters": {}},
+            }},
+            {"type": "execution_finished", "payload": {
+                "action": {"tool": "ensemble_disconnections", "parameters": {}},
+                "result": {"returncode": 0, "output": json.dumps({
+                    "reactions": [
+                        {"id": "ensemble_1", "precursor_smiles_list": ["CCO"], "unanimous": True},
+                        {"id": "ensemble_2", "precursor_smiles_list": ["CCCl"], "unanimous": False},
+                    ],
+                })},
+            }},
+        ]
+
+        metrics = analyze_research_events(events)
+
+        self.assertEqual(metrics["retrochimera_call_count"], 1)
+        self.assertEqual(metrics["retrochimera_candidate_count"], 1)
+        self.assertEqual(metrics["ensemble_call_count"], 1)
+        self.assertEqual(metrics["ensemble_candidate_count"], 2)
+        self.assertEqual(metrics["consensus_candidate_count"], 1)
+        self.assertEqual(metrics["proposal_reaction_count"], 0)
+        self.assertFalse(metrics["used_validation_tools"])
+
+    def test_component_predictions_count_as_proposals_not_validation(self):
+        events = []
+        for name in ("neuralloc_predict", "transformer_predict"):
+            events.extend([
+                {"type": "execution_started", "payload": {"action": {"tool": name}}},
+                {"type": "execution_finished", "payload": {
+                    "action": {"tool": name}, "result": {"output": "{}", "returncode": 0},
+                }},
+            ])
+        metrics = analyze_research_events(events)
+        self.assertEqual(metrics["component_call_counts"], {"neuralloc_predict": 1, "transformer_predict": 1})
+        self.assertFalse(metrics["used_validation_tools"])
+
     def test_run_cli_passes_discovery_permission_and_workspace_options(self):
         fake_agent = Mock()
         fake_agent.run.return_value = {

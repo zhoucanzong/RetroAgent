@@ -122,8 +122,17 @@ def build_route_portfolio(
     routes = []
     for members in grouped.values():
         members.sort(key=lambda item: (item["id"], item["source"]))
-        sources = sorted({item["source"] for item in members})
-        scores = [item["score"] for item in members]
+        sources = sorted({source for item in members for source in item["sources"]})
+        source_scores: dict[str, float] = {}
+        for source in sources:
+            values = [
+                float(item["source_scores"][source])
+                for item in members
+                if source in item["source_scores"]
+                and isinstance(item["source_scores"][source], (int, float))
+            ]
+            source_scores[source] = max(values) if values else max(item["score"] for item in members)
+        scores = list(source_scores.values())
         mean_score = sum(scores) / len(scores)
         disagreement = statistics.pstdev(scores) if len(scores) > 1 else 0.0
         source_coverage = min(1.0, len(set(sources) & source_universe) / len(source_universe))
@@ -163,7 +172,7 @@ def build_route_portfolio(
             "sources": sources,
             "source_count": len(sources),
             "source_coverage": round(source_coverage, 6),
-            "source_scores": {item["source"]: round(item["score"], 6) for item in members},
+            "source_scores": {source: round(score, 6) for source, score in source_scores.items()},
             "model_disagreement": round(disagreement, 6),
             "novelty_score": round(novelty, 6),
             "novelty_basis": novelty_basis,
@@ -314,9 +323,15 @@ def validate_route_portfolio(
 def _normalize_candidate(candidate: Any, target: str, index: int) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         raise ValueError(f"Candidate {index} must be an object")
-    source = str(candidate.get("source", "")).strip()
-    if not source:
-        raise ValueError(f"Candidate {index} requires source")
+    raw_sources = candidate.get("sources")
+    if raw_sources is None:
+        raw_sources = [candidate.get("source", "")]
+    if not isinstance(raw_sources, list):
+        raise ValueError(f"Candidate {index} sources must be an array")
+    sources = sorted({str(source).strip() for source in raw_sources if str(source).strip()})
+    if not sources:
+        raise ValueError(f"Candidate {index} requires source or sources")
+    source = str(candidate.get("source", "")).strip() or sources[0]
     candidate_id = str(candidate.get("id") or f"route_candidate_{index + 1}")
     score = _probability(candidate.get("score", candidate.get("feasibility", 0.5)), f"candidate.{candidate_id}.score")
     raw_reactions = candidate.get("reactions", [])
@@ -353,9 +368,18 @@ def _normalize_candidate(candidate: Any, target: str, index: int) -> dict[str, A
     if reactions[-1]["product_smiles"] != target:
         raise ValueError(f"Candidate {candidate_id} final product does not match target_smiles")
     signature = "||".join(sorted(reaction["reaction_smiles"] for reaction in reactions))
+    provided_source_scores = candidate.get("individual_scores", {})
+    if not isinstance(provided_source_scores, dict):
+        raise ValueError(f"Candidate {candidate_id} individual_scores must be an object")
+    source_scores = {
+        source_name: provided_source_scores.get(source_name, score)
+        for source_name in sources
+    }
     return {
         "id": candidate_id,
         "source": source,
+        "sources": sources,
+        "source_scores": source_scores,
         "score": score,
         "reactions": reactions,
         "signature": signature,

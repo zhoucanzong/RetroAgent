@@ -1,5 +1,5 @@
 # Core dependencies
-rdkit>=2024.3.1
+rdkit>=2023.9.6
 onnxruntime>=1.18.0
 h5py>=3.11.0
 rdchiral>=1.1.0

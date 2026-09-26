@@ -63,6 +63,26 @@ class RouteDiscoveryTests(unittest.TestCase):
         self.assertEqual(result["route_portfolio"]["unique_route_count"], 2)
         self.assertEqual({route["id"] for route in result["routes"]}, {"esterification", "acyl_chloride"})
 
+    def test_portfolio_preserves_constituent_sources_from_ensemble_candidate(self):
+        result = build_route_portfolio(
+            target_smiles=TARGET,
+            candidates=[{
+                "id": "chimera_route",
+                "source": "rank_weighted_ensemble",
+                "sources": ["neural_loc", "r_smiles_2"],
+                "individual_scores": {"neural_loc": 0.7, "r_smiles_2": 0.9},
+                "score": 0.84,
+                "reactions": [REACTION],
+            }],
+            expected_sources=["neural_loc", "r_smiles_2"],
+        )
+
+        route = result["routes"][0]
+        self.assertEqual(route["sources"], ["neural_loc", "r_smiles_2"])
+        self.assertEqual(route["source_count"], 2)
+        self.assertEqual(route["source_coverage"], 1.0)
+        self.assertEqual(route["source_scores"], {"neural_loc": 0.7, "r_smiles_2": 0.9})
+
     def test_portfolio_rejects_candidate_that_does_not_reach_target(self):
         with self.assertRaisesRegex(ValueError, "does not match target"):
             build_route_portfolio(

@@ -11,6 +11,7 @@ from retroagent.benchmark import score_discovery_v3_events
 from retroagent.environments import RetroEnvironment
 from retroagent.tools.active_learning import BeliefUpdaterTool, ExperimentSelectorTool
 from retroagent.tools.route_discovery import IndependentRouteValidatorTool, RoutePortfolioTool
+from retroagent.tools.retrochimera import NeuralLocPredictionTool, TransformerPredictionTool
 
 
 def _decision(action_type, action, target_ids, *, stop=False, conclusion="", evidence_ids=None):
@@ -190,6 +191,36 @@ def _competing_routes_ledger() -> ResearchLedger:
 
 
 class DiscoveryControllerTests(unittest.TestCase):
+    def test_agent_can_choose_standalone_models_without_forced_ensemble_sequence(self):
+        prediction = type("Prediction", (), {
+            "reactants": [type("Molecule", (), {"smiles": "CCO"})()],
+            "metadata": {"probability": 0.8},
+        })()
+        factory = lambda **kwargs: lambda inputs, num_results: [[prediction]]
+        env = RetroEnvironment(include_bash=False)
+        env.register("transformer_predict", TransformerPredictionTool(model_factory=factory, molecule_factory=str))
+        env.register("neuralloc_predict", NeuralLocPredictionTool(model_factory=factory, molecule_factory=str))
+        ledger = ResearchLedger()
+        class ChoosingModel(_ScriptedModel):
+            def query(self, messages, tools=None):
+                if self.decisions[0]["stop"]:
+                    self.decisions[0]["target_ids"] = list(ledger.replay().reactions)
+                return super().query(messages, tools)
+        with tempfile.TemporaryDirectory() as tmp:
+            model = ChoosingModel([
+                _decision("tool", {"tool": name, "parameters": {
+                    "target_smiles": "CC=O", "model_dir": tmp,
+                }}, []) for name in ("transformer_predict", "neuralloc_predict")
+            ] + [_decision("stop", {}, [], stop=True,
+                           conclusion="Two computational proposal sources were compared.",
+                           evidence_ids=["evidence_0001", "evidence_0002"])])
+            result = DiscoveryController(model, env, ledger=ledger, workspace=tmp,
+                                         allow_execution_tools=False).run("Compare proposal sources")
+        self.assertEqual(result["exit_status"], "Submitted")
+        self.assertEqual(len(ledger.replay().reactions), 2)
+        self.assertEqual([e.payload["source"] for e in ledger.events if e.type == "evidence_added"],
+                         ["transformer_predict", "neuralloc_predict"])
+
     def test_failure_feedback_is_observed_before_agent_selects_alternative_route(self):
         ledger = _competing_routes_ledger()
         model = _ScriptedModel([

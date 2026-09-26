@@ -11,9 +11,9 @@
 
 > 📖 简体中文｜[English version ↓](#-english-version)
 
-RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——**LLM 是唯一的决策中枢，专用化学工具全部退化为纯函数（只计算和获取事实，从不替模型做判断）**，并由独立的隔离审查 sub-agent 纠错、免费层文献检索接地。覆盖逆合成路线规划、手性配体与金属催化剂设计、以及文献查证。
+RetroAgent 是一个化学研究 Agent：由 LLM 根据研究目标、已有证据和计算预算，自主选择工具、提出假设、比较路线并调整研究方向。逆合成神经模型、化学计算、文献检索、代码执行和研究账本共同构成它的脚手架，支持逆合成规划、手性配体与金属催化剂设计及文献查证。
 
-> 智能只存在于 **Planner（LLM）**。专用化学模型（ONNX、模板库、库存、RDKit）与外部检索（文献、URL）全部退化为 **Tool** —— 纯函数，不做决策。判断（路线好坏、催化剂对错）由 LLM 在隔离的审查上下文里完成。
+> **Agent 决定研究策略，脚手架提供预测、计算和证据。** NeuralLoc、R-SMILES 2 Transformer、RetroChimera 都可独立调用；它们不是驱动 Agent 的 LLM，也不会接管研究循环。系统负责权限、预算、状态持久化和配置的完成条件，Agent 可以质疑模型预测、编写分析代码并探索其他路线。
 
 ---
 
@@ -22,6 +22,8 @@ RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——*
 | 模式                         | 输入            | 核心工具链                                                                                  | 输出                        |
 | ---------------------------- | --------------- | ------------------------------------------------------------------------------------------- | --------------------------- |
 | **Retrosynthesis**     | 目标分子 SMILES | `disconnect` → `propose` → `evaluate` → `check_stock`                            | 完整合成路线                |
+| **Neural Proposals** | 目标分子 SMILES | `neuralloc_predict` / `transformer_predict` / `retrochimera_predict`，由 Agent 选择 | 带来源与排名的候选前体 |
+| **Multi-source Fusion** | 多来源候选列表 | `ensemble_disconnections`，可接入路线组合与独立验证 | 共识排序与来源记录 |
 | **Ligand Design**      | 自然语言约束    | `design_ligand` → `analyze_chirality` → `classify_ligand`                           | 候选手性配体                |
 | **Catalyst Assembly**  | 结构化约束      | `design_catalyst` (配位数/d电子/labile位点计算) → Auditor 审查                           | 金属催化剂描述符 + 事实报告 |
 | **Literature Search**  | 查询词          | `web_search` (Crossref/S2/PubChem) → `fetch_url`                                       | 文献命中 + 摘要             |
@@ -33,36 +35,24 @@ RetroAgent 是一个借鉴 Claude agent 设计哲学的化学推理系统——*
 
 ## 🏗️ 架构
 
+```mermaid
+flowchart TD
+    Goal[研究目标] --> Agent[RetroAgent / LLM 决策循环]
+    Agent <--> Models[预测工具: NeuralLoc / Transformer / RetroChimera]
+    Agent <--> Chemistry[化学工具: 融合 / 路线 / 映射 / 库存 / 性质]
+    Agent <--> Evidence[文献检索 / 独立审查]
+    Agent <--> Execution[受权限控制的 Python / 系统工具]
+    Agent <--> State[ResearchLedger: 假设 / 证据 / 决策 / 失败]
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Planner (LLM)                               │
-│              唯一决策中枢：选择策略、交叉验证、终止判断                    │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        │                       │                       │
-        ▼                       ▼                       ▼
-┌───────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│  Retrosynthesis │      │  Ligand Design  │      │   Chiral Eval   │
-│     Workflow    │      │    Workflow     │      │    Workflow     │
-│                 │      │                 │      │                 │
-│ disconnect ──▶  │      │ design_ligand   │      │ analyze_chirality│
-│ propose ────▶   │      │ analyze_chirality│     │ classify_ligand │
-│ evaluate ───▶   │      │ classify_ligand │      │ evaluate        │
-│ check_stock ──▶ │      │ check_stock     │      │ check_stock     │
-└───────────────┘      └─────────────────┘      └─────────────────┘
-                                │
-                                ▼
-                    ┌───────────────────────┐
-                    │    Shared Blackboard   │
-                    │   纯状态容器，无决策逻辑  │
-                    └───────────────────────┘
-```
+
+工具间的 ToolGraph 是能力与后续动作提示，不强制模型调用顺序。可选的
+`--discovery-v3` 启用更严格的完成条件；它不要求每个任务都调用所有神经模型。
 
 ### 架构参考
 
 - **[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)**：Agent 控制循环、Environment 协议、异常体系
 - **[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder)**：ONNX 策略网络、USPTO 模板库、RDChiral 模板应用、ZINC 库存
+- **[Microsoft RetroChimera](https://github.com/microsoft/retrochimera)**：异构归纳偏置模型的 reactant-set 聚合、来源 × 排名加权和 consensus mode。RetroAgent 保留原项目归属，并将该思想扩展到模型、数据库和人工候选的统一 Agent 工具协议
 
 ---
 
@@ -97,7 +87,9 @@ retroagent/
 │   ├── functional_groups.py # FunctionalGroupsTool (50+ SMARTS 官能团识别)
 │   ├── identifiers.py       # IdentifierTool (PubChem name/IUPAC/CAS ↔ SMILES)
 │   ├── properties.py        # PropertiesTool (RDKit 物理化学描述符)
-│   └── reaction_mapper.py   # ReactionMapperTool (rxnmapper 原子映射)
+│   ├── reaction_mapper.py   # ReactionMapperTool (rxnmapper 原子映射)
+│   ├── retrochimera.py      # RetroChimera 可选适配器 + 多来源排名共识融合
+│   └── route_discovery.py   # 路线组合、novelty 与独立验证门控
 ├── config/
 │   ├── default.yaml         # 默认配置（模型路径 + LLM + Agent + Environment）
 │   └── config.local.yaml    # 本地覆盖（gitignored，放 API key）
@@ -129,6 +121,54 @@ models/                      # 模型文件平铺存放（不提交到 Git）
 - **Figshare 12334577**：`zinc_stock.hdf5`, `full_uspto_03_05_19_unique_templates.hdf5`
 
 > 大文件不提交到 Git，见 `.gitignore`。
+
+### RetroChimera 融合（可选）
+
+RetroAgent 借鉴 [RetroChimera](https://github.com/microsoft/retrochimera) 的核心观察：具有不同归纳偏置的模型通常比同类模型重复采样更互补；对规范化 reactant set 的来源与排名进行加权，可让跨来源共识候选上升，同时保留单一来源的新颖候选。对应论文为 [*Chemist-aligned retrosynthesis by ensembling diverse inductive bias models*](https://arxiv.org/abs/2412.05269)。
+
+```bash
+# 安装上游可选依赖；checkpoint 仍需按 RetroChimera 文档单独下载
+pip install -e '.[retrochimera]'
+export RETROCHIMERA_MODEL_DIR=/absolute/path/to/retrochimera-checkpoint
+
+# 直接调用 RetroChimera 1.3+，保留 constituent ranks/probability
+retroagent project init ./my-research
+retroagent tool call retrochimera_predict --parameters \
+  '{"target_smiles":"CCOC(=O)C","num_results":5,"consensus_only":false}' --project ./my-research --json
+```
+
+Apple Silicon CPU 的独立环境、权重来源校验与真实推理复现见
+[RetroChimera CPU Inference](docs/retrochimera-cpu.md)。
+
+| Agent 工具 | 模型能力 | 参数 |
+| --- | --- | --- |
+| `neuralloc_predict` | NeuralLoc 模板选择与作用位置预测 | `model_kwargs`，例如 `num_processes` |
+| `transformer_predict` | R-SMILES 2 从目标 SMILES 生成前体 | `model_kwargs`，例如 `beam_size`、`augmentation_size` |
+| `retrochimera_predict` | 上游训练好的两模型集成 | `consensus_only`、`submodel_kwargs` |
+
+三个入口共享 `target_smiles / model_dir / num_results / device` 参数。单模型入口接受
+集成 checkpoint 根目录并自动定位对应子目录，也接受直接的子模型目录。
+输出中的 `ensemble_source` 可以原样放入 `ensemble_disconnections.sources`。
+先分别调用两个子模型并比较，再决定是否融合，或直接调用集成模型，均由 Agent 决定。
+
+来源身份 `source_ids` 基于实际 checkpoint 路径保留；融合器拒绝把同一个 checkpoint
+的重复调用、改名后的调用，或集成模型与其子模型再次当作独立来源计票。
+手工输入仍需如实声明来源；来源标签本身不证明统计独立性。
+同一环境的这组三个工具只保留一个活动模型配置，切换时释放旧模型及模板 worker，
+重复使用同一配置则复用模型。不同目标的反应使用稳定内容 ID，避免覆盖研究账本。
+
+完成 CPU 环境配置后，可以直接在具备这些模型依赖的环境中启动 Agent：
+
+```bash
+export RETROCHIMERA_MODEL_DIR="$PWD/models/retrochimera/pistachio"
+.venv/retrochimera/bin/retroagent agent run \
+  "比较目标分子的逆合成策略，自主选择预测工具，并列出尚需验证的证据" \
+  --project ./my-research
+```
+
+没有 checkpoint 时，`ensemble_disconnections` 仍可融合现有模板模型、任意 template-free 模型、数据库检索和人工输入。它先用 RDKit canonical SMILES 合并无序反应物集合，再按校准的 `source × rank` 权重求和；若未提供校准权重，会显式标记使用 reciprocal-rank fallback。`consensus_only=true` 仅保留所有来源共同提出的候选。
+
+融合分数只表示候选排序与来源共识，不表示反应可行性。输出仍需经过 `evaluate / map_reaction / build_route_portfolio / validate_route_portfolio`，并补齐 forward prediction、条件和库存证据。遵循上游风险说明，直接请求默认限制为 5 个、最多 10 个候选；模型权重及 checkpoint 不随 RetroAgent 分发。
 
 ---
 
@@ -342,7 +382,13 @@ LLM 根据审查反馈修正并提交
 | Phase 4   | ✅   | Claude 哲学重构: 隔离 Auditor sub-agent + design_catalyst 计算器 + classify_ligand SMARTS 修复 + 上下文压缩                   |
 | Phase 5   | ✅   | 模型侧优化: design_ligand 模板化 + 全免费层 web_search/fetch_url + 文献接地的审查                                             |
 | Phase 6   | ✅   | 集成: check_patent/functional_groups/convert_identifier/molecule_properties/map_reaction + examples 元数据增强                |
-| Phase 7   | ⏳   | Benchmark 评估 + 更强 LLM (Auditor 用 Opus/GPT-4 级) + IBM RXN 正向合成（需 key）                                             |
+| Research Agent | 已实现 | DiscoveryController、证据账本、主动实验选择、后验更新、可选 v3 完成条件 |
+| Agent CLI | 已实现 | 项目、审批、回放、检查点、JSON 与 MCP 工具接口 |
+| Neural Scaffolding | 已验证 | 三个独立模型入口、来源去重、真实 CPU 推理及候选融合 |
+
+2026-09-27：原开发环境与神经推理环境均通过 192 项回归测试；NeuralLoc 与
+Transformer 独立调用各生成 5 个候选，其真实输出可直接融合。完整集成模型也已跑通。
+这些验证确认软件运行与接口兼容；新路线的实验可行性和未见化学问题上的泛化仍需独立评估。
 
 ---
 
@@ -375,15 +421,17 @@ LLM 根据审查反馈修正并提交
 
 > This is the English version of the Chinese README above. The two are kept in sync; the Chinese version is authoritative.
 
-**RetroAgent** is a chemistry reasoning system inspired by Claude's agent design philosophy — **the LLM is the sole decision-maker, and every specialized chemistry tool is reduced to a pure function that only computes or fetches facts and never makes decisions on the model's behalf.** An independent, isolated review sub-agent catches errors, and a free-tier literature search grounds proposals in real references. It covers retrosynthetic route planning, chiral-ligand and metal-catalyst design, and literature verification.
+**RetroAgent** is a chemistry research Agent. Its LLM chooses research actions using the goal, evidence, and budget. Prediction models, chemistry calculators, literature retrieval, code execution, and a replayable ledger form its scaffolding. These capabilities support retrosynthesis, ligand and catalyst design, and literature verification.
 
-> Intelligence lives **only in the Planner (LLM)**. Specialized models (ONNX policies, template libraries, stock, RDKit) and external retrieval (literature, URLs) are all reduced to **Tools** — pure functions that make no decisions. Judgments (is a route good? is a catalyst correct?) are made by the LLM inside an isolated review context.
+> **The Agent owns the research strategy.** NeuralLoc, the R-SMILES 2 Transformer, and RetroChimera are optional prediction tools, distinct from the Agent's LLM. ToolGraph links are suggestions; the Agent may compare, reject, combine, or move beyond their predictions. Permissions, budgets, and configured completion criteria are enforced by the runtime.
 
 ### Core Capabilities
 
 | Mode | Input | Core tool chain | Output |
 | --- | --- | --- | --- |
 | **Retrosynthesis** | target SMILES | `disconnect` → `propose` → `evaluate` → `check_stock` | complete synthetic route |
+| **Neural Proposals** | target SMILES | Agent chooses `neuralloc_predict`, `transformer_predict`, or `retrochimera_predict` | ranked precursor candidates |
+| **Multi-source Fusion** | ranked candidates | optional `ensemble_disconnections`, followed by Agent-selected checks | consensus ranks and provenance |
 | **Ligand Design** | natural-language constraints | `design_ligand` → `analyze_chirality` → `classify_ligand` | candidate chiral ligands |
 | **Catalyst Assembly** | structured constraints | `design_catalyst` (coordination/d-electron/labile-site calc) → Auditor review | metal-catalyst descriptor + fact report |
 | **Literature Search** | query | `web_search` (Crossref/S2/PubChem) → `fetch_url` | literature hits + abstracts |
@@ -393,9 +441,22 @@ LLM 根据审查反馈修正并提交
 
 ### Architecture
 
-The Planner (LLM) is the only decision hub. Tools are pure functions. A shared blackboard holds state (no logic). Two isolated review sub-agents — a Peer Reviewer (retrosynthesis) and a Design Auditor (catalyst/ligand design) — run in fresh contexts on fact-only snapshots, with literature fetched proactively so they judge against real precedents.
+The LLM controls the research loop. DiscoveryController records decisions, authorizes actions, executes tools, and assimilates results into ResearchLedger. Isolated reviewers can inspect factual snapshots; computational predictions remain proposals requiring evidence. Legacy planning modes also use the shared blackboard.
 
-Architectural references: **[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)** (agent loop, environment protocol) and **[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder)** (ONNX policy, USPTO templates, RDChiral, ZINC stock).
+Architectural references: **[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)** (agent loop, environment protocol), **[AiZynthFinder](https://github.com/MolecularAI/aizynthfinder)** (ONNX policy, USPTO templates, RDChiral, ZINC stock), and **[Microsoft RetroChimera](https://github.com/microsoft/retrochimera)** (reactant-set aggregation, source-by-rank weighting, and consensus mode across complementary inductive biases).
+
+### Optional RetroChimera Integration
+
+Install `pip install -e '.[retrochimera]'`, download an upstream checkpoint separately, and set `RETROCHIMERA_MODEL_DIR`. The `retrochimera_predict` tool calls RetroChimera 1.3+ while preserving constituent ranks and metadata. The model-independent `ensemble_disconnections` tool applies the same rank-weighted consensus protocol to any combination of models, database hits, and human proposals. See [the RetroChimera repository](https://github.com/microsoft/retrochimera) and its [paper](https://arxiv.org/abs/2412.05269).
+
+`neuralloc_predict` and `transformer_predict` also expose the constituent models independently.
+Single-model tools accept the ensemble root or component directory and `model_kwargs`.
+Pass returned `ensemble_source` objects unchanged to the fusion tool; overlapping checkpoint
+identities are rejected to prevent double counting. One active model configuration is retained
+per environment across these three tools. See the [tested CPU setup](docs/retrochimera-cpu.md)
+for the full neural runtime dependencies and executable examples.
+
+Ensemble scores express agreement and ranking, not chemical feasibility. Every candidate remains subject to RetroAgent's independent mapping, forward-prediction, condition, stock, route, and expert-review gates. RetroChimera checkpoints and weights are not redistributed by this project.
 
 ### Quick Start
 
@@ -432,7 +493,13 @@ See the Chinese "关键设计决策" section above for the full list (20 points)
 
 ### Current Status
 
-Phases 1–6 complete: project skeleton, shared blackboard, environment + tools, Planner loop, YAML config, ring-breaker policy, end-to-end LLM-driven planning, loop engineering (think tool + dead-loop monitor + adaptive scaling + branch tracking), Claude-philosophy refactor (isolated auditor + `design_catalyst` calculator + SMARTS fix + context compaction), model-side optimization (template `design_ligand` + free-tier `web_search`/`fetch_url` + literature-grounded review), and a molecule-analysis tool layer (`check_patent` / `functional_groups` / `convert_identifier` / `molecule_properties` / `map_reaction`) plus `examples` metadata for tool-call reliability. Phase 7 (benchmark evaluation + stronger LLM for the Auditor + IBM RXN forward synthesis) is pending.
+The project includes DiscoveryController, replayable research evidence, active-learning tools,
+an Agent-native CLI/MCP interface, and three independently callable neural prediction tools.
+On 2026-09-27, both Python environments passed 192 regression tests. Real NeuralLoc and
+Transformer calls each produced five candidates, and their outputs were successfully fused.
+The combined RetroChimera model also completed real CPU inference. These are software and
+integration checks; experimental feasibility and generalization to unseen chemistry require
+separate evaluation.
 
 ---
 

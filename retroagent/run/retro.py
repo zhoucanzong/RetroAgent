@@ -51,6 +51,10 @@ from retroagent.tools.feedback_oracle import FeedbackOracleTool
 from retroagent.tools.blind_study_oracle import BlindStudyOracleTool
 from retroagent.tools.active_learning import BeliefUpdaterTool, ExperimentSelectorTool
 from retroagent.tools.route_discovery import IndependentRouteValidatorTool, RoutePortfolioTool
+from retroagent.tools.retrochimera import (
+    DisconnectionEnsembleTool, RetroChimeraPredictionTool,
+    NeuralLocPredictionTool, TransformerPredictionTool,
+)
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -274,6 +278,11 @@ def _build_environment() -> RetroEnvironment:
     env.register("update_hypotheses", BeliefUpdaterTool())
     env.register("build_route_portfolio", RoutePortfolioTool())
     env.register("validate_route_portfolio", IndependentRouteValidatorTool())
+    neural_model_cache = {}
+    env.register("retrochimera_predict", RetroChimeraPredictionTool(model_cache=neural_model_cache))
+    env.register("neuralloc_predict", NeuralLocPredictionTool(model_cache=neural_model_cache))
+    env.register("transformer_predict", TransformerPredictionTool(model_cache=neural_model_cache))
+    env.register("ensemble_disconnections", DisconnectionEnsembleTool())
 
     return env
 

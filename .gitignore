@@ -16,6 +16,7 @@ models/uspto_unique_templates.csv
 models/unimol_weights/
 models/unimol_checkpoints/
 models/hf_cache/
+models/retrochimera/
 papers
 ChemMCP-main
 CHEMMCP_INTEGRATION.md

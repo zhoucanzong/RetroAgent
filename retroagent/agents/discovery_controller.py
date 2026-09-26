@@ -37,7 +37,15 @@ recorded evidence ids. For discovery_v3 goals, keep at least two competing hypot
 candidate experiments with select_experiment before measuring, update probabilities with
 update_hypotheses after an observation, combine genuinely different route generators with
 build_route_portfolio, and use validate_route_portfolio as an independent gate before selecting
-a route. Novelty is a scored uncertainty, never proof of feasibility.
+a route. Prefer complementary inductive biases over duplicate model copies; when ranked outputs
+overlap, use ensemble_disconnections to preserve source-specific ranks and consensus. An ensemble
+score is not feasibility evidence. Novelty is a scored uncertainty, never proof of feasibility.
+You control the research strategy. neuralloc_predict (template/localization), transformer_predict
+(R-SMILES 2 de-novo chemistry model), and retrochimera_predict (their ensemble) are optional
+scaffolding, not a mandatory sequence. Choose a model based on the current uncertainty and cost;
+inspect disagreements, challenge predictions, and author alternative hypotheses when useful.
+Pass ensemble_source objects unchanged to ensemble_disconnections. Never count an ensemble and
+its constituent models as independent votes. ToolGraph next-step hints are suggestions.
 """
 
 

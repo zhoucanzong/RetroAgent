@@ -710,6 +710,12 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
     experiment_control_count = 0
     memory_search_count = 0
     memory_record_count = 0
+    retrochimera_call_count = 0
+    component_call_counts = {"neuralloc_predict": 0, "transformer_predict": 0}
+    retrochimera_candidate_count = 0
+    ensemble_call_count = 0
+    ensemble_candidate_count = 0
+    consensus_candidate_count = 0
 
     for message in messages:
         content = message.get("content", "") or ""
@@ -737,6 +743,17 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         if tool == "propose":
             proposal_reactions.extend(data.get("reactions", []))
+        elif tool in component_call_counts:
+            component_call_counts[tool] += 1
+        elif tool == "retrochimera_predict":
+            retrochimera_call_count += 1
+            retrochimera_candidate_count += len(data.get("reactions", []))
+        elif tool == "ensemble_disconnections":
+            ensemble_call_count += 1
+            ensemble_candidate_count += len(data.get("reactions", []))
+            consensus_candidate_count += sum(
+                bool(reaction.get("unanimous")) for reaction in data.get("reactions", [])
+            )
         elif tool == "score_routes":
             scored_route_count += len(data.get("routes", []))
             summary = data.get("summary", {}) or {}
@@ -839,6 +856,12 @@ def analyze_trajectory(messages: list[dict[str, Any]]) -> dict[str, Any]:
         "experiment_control_count": experiment_control_count,
         "memory_search_count": memory_search_count,
         "memory_record_count": memory_record_count,
+        "retrochimera_call_count": retrochimera_call_count,
+        "component_call_counts": component_call_counts,
+        "retrochimera_candidate_count": retrochimera_candidate_count,
+        "ensemble_call_count": ensemble_call_count,
+        "ensemble_candidate_count": ensemble_candidate_count,
+        "consensus_candidate_count": consensus_candidate_count,
         "used_evidence_tools": evidence_tools_used,
         "used_risk_tools": risk_tools_used,
         "used_validation_tools": validation_tools_used,
@@ -880,6 +903,12 @@ def analyze_research_events(events: list[Any]) -> dict[str, Any]:
     experiment_plan_count = 0
     memory_record_count = 0
     memory_search_count = 0
+    retrochimera_call_count = 0
+    component_call_counts = {"neuralloc_predict": 0, "transformer_predict": 0}
+    retrochimera_candidate_count = 0
+    ensemble_call_count = 0
+    ensemble_candidate_count = 0
+    consensus_candidate_count = 0
     for row in rows:
         if row.get("type") != "execution_finished":
             continue
@@ -889,6 +918,17 @@ def analyze_research_events(events: list[Any]) -> dict[str, Any]:
         data = _event_result_data(payload.get("result", {}))
         if tool == "propose":
             proposal_reactions.extend(data.get("reactions", []))
+        elif tool in component_call_counts:
+            component_call_counts[tool] += 1
+        elif tool == "retrochimera_predict":
+            retrochimera_call_count += 1
+            retrochimera_candidate_count += len(data.get("reactions", []))
+        elif tool == "ensemble_disconnections":
+            ensemble_call_count += 1
+            ensemble_candidate_count += len(data.get("reactions", []))
+            consensus_candidate_count += sum(
+                bool(reaction.get("unanimous")) for reaction in data.get("reactions", [])
+            )
         elif tool == "score_routes":
             scored_route_count += len(data.get("routes", []))
             summary = data.get("summary", {}) or {}
@@ -928,7 +968,8 @@ def analyze_research_events(events: list[Any]) -> dict[str, Any]:
     risk_tools = {
         "check_patent", "functional_groups", "molecule_properties", "map_reaction",
         "chemical_critic", "design_experiments", "build_research_report", "research_memory",
-        "build_route_portfolio", "validate_route_portfolio",
+        "build_route_portfolio",
+        "validate_route_portfolio",
     }
     validation_tools = {
         "evaluate", "check_stock", "recommend_conditions", "map_reaction", "score_routes",
@@ -957,6 +998,12 @@ def analyze_research_events(events: list[Any]) -> dict[str, Any]:
         "experiment_plan_count": experiment_plan_count,
         "memory_record_count": memory_record_count,
         "memory_search_count": memory_search_count,
+        "retrochimera_call_count": retrochimera_call_count,
+        "component_call_counts": component_call_counts,
+        "retrochimera_candidate_count": retrochimera_candidate_count,
+        "ensemble_call_count": ensemble_call_count,
+        "ensemble_candidate_count": ensemble_candidate_count,
+        "consensus_candidate_count": consensus_candidate_count,
         "used_evidence_tools": bool(set(tool_sequence).intersection(evidence_tools)),
         "used_risk_tools": bool(set(tool_sequence).intersection(risk_tools)),
         "used_validation_tools": bool(set(tool_sequence).intersection(validation_tools)),

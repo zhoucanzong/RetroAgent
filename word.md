@@ -340,3 +340,37 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
 - Agent-native CLI 新增 `agent run --discovery-v3`、`--max-posterior-entropy` 和 `--min-route-novelty`；旧入口 `run --mode discovery` 同样支持。新增 `score-discovery-v3 TRAJECTORY --require-pass`，按事件而非最终答案关键词评分六项闭环能力。
 - ToolGraph 已连接 `chemical_critic/design_experiments -> select_experiment -> update_hypotheses -> build_route_portfolio -> validate_route_portfolio -> report/memory`；四个新工具进入常规 Discovery 环境，但不进入现有 blind-study allowlist。
 - 新增单元与完整脚本 Agent 轨迹测试，覆盖实验效用排序、概率归一化、结构等价路线去重、novelty 估计、独立证据缺失/矛盾/通过三态、事件回放、CLI completion contract 和 v3 trajectory scorer。
+
+### 2026-09-26 RetroChimera 多来源共识融合
+
+- 研究并引用 Microsoft [RetroChimera](https://github.com/microsoft/retrochimera) 及论文 `Chemist-aligned retrosynthesis by ensembling diverse inductive bias models`。核心启发不是简单增加一个模型，而是在 canonical reactant-set 层聚合具有互补归纳偏置的来源，并使用 source-by-rank 权重求和提升跨来源共识候选。
+- 新增可选 `retrochimera_predict` 适配器：兼容 RetroChimera 1.3+，通过 `RETROCHIMERA_MODEL_DIR` 或参数加载 checkpoint，支持 `consensus_only`、并行 submodel 调用和 1-10 个候选；输出转换为 RetroAgent reaction contract，同时保留 constituent model ranks、metadata、ensemble score 与 probability。
+- `pyproject.toml` 新增 `retrochimera` optional extra，默认安装不引入其 PyTorch/Syntheseus 依赖，模型和 checkpoint 不在本仓库分发。
+- 新增模型无关 `ensemble_disconnections`：接受 template、template-free、数据库或人工来源的有序候选；用 RDKit canonical SMILES 把无序 reactant set 去重，按校准的来源 × 排名权重求和，支持 consensus-only、最小来源数、softmax probability 和完整 provenance。没有校准 profile 时明确标记 reciprocal-rank fallback。
+- rank-weight profile 强制非负、随排名单调不增且凸，避免任意权重破坏排序含义；超过 10 个输出会产生严格过滤警告。ensemble score 被显式标注为排序信号，不得作为 feasibility evidence。
+- `build_route_portfolio` 现在能从单个 ensemble candidate 中展开 constituent sources 与 individual scores；修复了多来源候选被压成同一个最高分、导致 model disagreement 错算为 0 的问题。
+- ToolGraph 更新为 `disconnect/propose/retrochimera_predict -> ensemble_disconnections -> build_route_portfolio -> validate_route_portfolio`。DiscoveryController 被明确要求优先组合不同归纳偏置，并继续执行 mapping、forward prediction、conditions、stock 与独立验证门控。
+- Discovery benchmark 轨迹分析新增 `retrochimera_call_count / retrochimera_candidate_count / ensemble_call_count / ensemble_candidate_count / consensus_candidate_count`，可以区分“工具已注册”和“Agent 实际利用了跨来源共识”。
+
+### 2026-09-27 RetroChimera 真实神经推理
+
+- 建立隔离的 `.venv/retrochimera` CPU 环境：Python 3.11.15、RetroChimera 1.3.0、Syntheseus 0.9.0、PyTorch 2.2.2、Lightning 2.2.2、RDKit 2023.9.6；依赖固定在 `requirements-retrochimera-cpu.txt`，`uv pip check` 通过。
+- 官方 Figshare 下载返回 HTTP 403，改用社区 `Ian-L/backwards-models-v2` 的 Pistachio safetensors 转存，固定 revision `30cc1962fa8de3decdc32f624b9c2ece324d2b45`。逐文件 SHA-256 校验通过，重建 inference-only Lightning checkpoint，保存来源记录。校验保证与固定镜像一致，尚未独立验证与原始 Microsoft 下载包逐字节等价。
+- 新增 `scripts/prepare_retrochimera_mirror.py` 和 `scripts/smoke_retrochimera.py`。模型位于忽略目录 `models/retrochimera/`，运行轨迹位于 `logs/retrochimera_smoke/`。复现步骤详见 `docs/retrochimera-cpu.md`。
+- 适配器增加按 checkpoint 子模型名称传递 `submodel_kwargs`，参数进入模型缓存键；真实调用禁用 autograd。修正发布版 1.3.0 尚无 `canonicalization_processes` 参数的兼容问题，保留其默认实现。
+- 通过正式 `RetroChimeraPredictionTool` 跑官方目标 `Oc1ccc(OCc2ccccc2)c(Br)c1`：beam size 20、augmentation size 10、CPU 4 线程、模板 worker 2 个。两子模型完整加载并推理，冷启动加预测耗时 172.95 秒，返回 5 条有效 SMILES 候选，进程退出码 0。
+- 首位前体 `BrCc1ccccc1` + `Oc1ccc(O)c(Br)c1`，两个子模型均排第 1，集成归一化概率 0.957151；这只证明真实推理与协议接通，不能当作反应成功率或盲测泛化结论。
+- 完整预测、模型版本、耗时及来源保存在 `logs/retrochimera_smoke/result.json`；完整日志为 `full_inference.log`。上游退出时报告一个 semaphore 清理警告，已核对无残留推理 worker。
+- 适配器定向回归 8 项、路线组合 8 项、DiscoveryController 31 项通过；脚本编译及 diff 检查通过。另有 Transformer 单模型真实试跑约 1.84 秒，使用 reduced beam/augmentation，仅用于排查运行兼容性。
+
+### 2026-09-27 Agent 可自主调用的神经模型脚手架
+
+- 明确架构：RetroAgent 是研究决策主体，NeuralLoc、R-SMILES 2 Transformer、RetroChimera 是可选能力；ToolGraph 只提供建议，Agent 自主选择调用、比较、验证或放弃候选，不强制三模型流水线。
+- 新增 `neuralloc_predict` 与 `transformer_predict`，保留集成入口 `retrochimera_predict`。单模型可以接受集成根目录并按 manifest 定位组件，或直接接受组件目录；`model_kwargs` 只传给该组件。三个入口共用适配器的规范化、缓存、记录和结果协议。
+- 结果增加可直接用于融合的 `ensemble_source`、实际 checkpoint 路径 `source_ids`、明确的 rank base 和生效推理选项。融合器拒绝重叠来源（重复/改名调用，以及集成模型与其自身组件再次投票），并拒绝不同目标分子的候选混入。
+- 规范化反应物时清除 atom-map 编号，保留立体化学；内容哈希反应 ID 避免不同目标的第一个候选都写入同一 `rxn_0001`。
+- 同一 Agent 环境的三个工具共享一个活动模型配置缓存；切换时释放旧模板 worker，重复调用复用已加载模型。CPU 默认模板 worker 数为 2；模型日志及 worker stdout 转入 stderr，修复真实 CLI 输出被上游日志污染的问题。
+- 降低 RDKit 最低版本到已实测的 2023.9.6，使完整 RetroAgent 可安装到 Python 3.11 神经运行环境；CPU requirements 加入 PyTables，用于现有模板库加载。原 Python 3.14 环境保持兼容。
+- 真实模型验证：NeuralLoc 独立入口返回 5 项，冷启动加推理 199.02 秒；Transformer 独立入口默认参数返回 5 项，5.51 秒。两份输出原样用于融合，得到 5 项候选，首位具有两个来源支持。保存于 `neuralloc_standalone.json / transformer_standalone.json / standalone_fusion.json`。
+- 神经环境的正式 CLI 已暴露 32 个工具，`transformer_predict --json` 真实执行、纯 JSON 解析和证据写入通过。脚本模型 Controller 测试验证可自主选择两个独立工具而不被要求调用集成；统计中预测/融合不再计作化学验证。
+- 原开发环境和神经运行环境各自通过 192 项回归；更新 README 中英文架构、模型入口说明、能力状态，以及 `docs/retrochimera-cpu.md` 的复现命令。尚未把软件通过或模型共识当成真实新路线可行性的证明。
