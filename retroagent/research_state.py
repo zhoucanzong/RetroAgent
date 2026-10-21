@@ -160,7 +160,7 @@ class ResearchState:
         elif event_type in ("execution_started", "execution_finished"):
             record = {"event_type": event_type, **payload}
             self.executions.append(record)
-        elif event_type in ("approval_requested", "approval_granted", "approval_denied", "approval_consumed"):
+        elif event_type in ("approval_requested", "approval_granted", "approval_denied", "approval_consumed", "approval_withdrawn"):
             self.approvals.append({
                 "event_id": event.id,
                 "causal_parent_id": event.causal_parent_id,

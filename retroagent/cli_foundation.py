@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 import typer
 
 from retroagent import get_config
-from retroagent.capabilities import command_schema, mcp_tools, skill_markdown
+from retroagent.capabilities import command_schema, mcp_tools, skill_markdown, skill_source_dir
 from retroagent.project import (
     ProjectError,
     ResearchProject,
@@ -19,10 +20,11 @@ from retroagent.project import (
     state_to_dict,
     unresolved_approval,
 )
-from retroagent.research_execution import PermissionGrant, PermissionMode, PolicyEngine, ResearchExecutor
-from retroagent.research_state import ResearchLedger, next_entity_id
+from retroagent.research_execution import PermissionGrant, PermissionMode
+from retroagent.research_state import ResearchLedger
 from retroagent.resources import RESOURCE_COLLECTIONS, ResourceRef, query_resources, resolve_resource
 from retroagent.views import render_view
+from retroagent.skill_runtime import project_lock
 
 
 CONTRACT_VERSION = "1.0"
@@ -367,18 +369,19 @@ def approve_command(
     """Approve exactly one pending action."""
     try:
         project = _project(project_path)
-        ledger = project.ledger()
-        pending = unresolved_approval(ledger.events)
-        if pending is None:
-            raise ProjectError("No unresolved approval request")
-        event = ledger.append(
-            "approval_granted",
-            {"scope": pending.scope, "action": pending.action, "one_time": True},
-            actor="user",
-            causal_parent_id=pending.request_event_id,
-        )
-        project.set_status("approved")
-        data = {"approval_event": event.to_dict(), "pending": pending.to_dict()}
+        with project_lock(project):
+            ledger = project.ledger()
+            pending = unresolved_approval(ledger.events)
+            if pending is None:
+                raise ProjectError("No unresolved approval request")
+            event = ledger.append(
+                "approval_granted",
+                {"scope": pending.scope, "action": pending.action, "one_time": True},
+                actor="user",
+                causal_parent_id=pending.request_event_id,
+            )
+            project.set_status("approved")
+            data = {"approval_event": event.to_dict(), "pending": pending.to_dict()}
     except (ProjectError, ValueError) as exc:
         _fail("approve", "E_APPROVAL", str(exc), json_output=json_output)
     _emit("approve", data, json_output=json_output, text=f"Approved {pending.request_event_id} for one execution")
@@ -392,19 +395,20 @@ def reject_command(
     """Reject a pending action and require replanning."""
     try:
         project = _project(project_path)
-        ledger = project.ledger()
-        pending = unresolved_approval(ledger.events)
-        if pending is None:
-            raise ProjectError("No unresolved approval request")
-        denied = ledger.append(
-            "approval_denied",
-            {"reason": reason, "action": pending.action},
-            actor="user",
-            causal_parent_id=pending.request_event_id,
-        )
-        ledger.append("decision_rejected", {"reason": reason, "action": pending.action}, actor="controller")
-        ledger.append("replan_required", {"reason": reason}, actor="controller")
-        project.set_status("active")
+        with project_lock(project):
+            ledger = project.ledger()
+            pending = unresolved_approval(ledger.events)
+            if pending is None:
+                raise ProjectError("No unresolved approval request")
+            denied = ledger.append(
+                "approval_denied",
+                {"reason": reason, "action": pending.action},
+                actor="user",
+                causal_parent_id=pending.request_event_id,
+            )
+            ledger.append("decision_rejected", {"reason": reason, "action": pending.action}, actor="controller")
+            ledger.append("replan_required", {"reason": reason}, actor="controller")
+            project.set_status("active")
     except (ProjectError, ValueError) as exc:
         _fail("reject", "E_APPROVAL", str(exc), json_output=json_output)
     _emit("reject", denied.to_dict(), json_output=json_output, text=f"Rejected {pending.request_event_id}")
@@ -532,18 +536,27 @@ def tool_call(
     project_path: Path = typer.Option(Path("."), "--project"),
     approve: bool = typer.Option(False, "--approve", help="Explicitly approve this exact high-risk call."),
     json_output: bool = typer.Option(False, "--json"),
+    parameters_file: Path | None = typer.Option(None, "--parameters-file"),
+    target_ids: list[str] = typer.Option([], "--target"),
+    research_question: str = typer.Option("", "--question"),
+    rationale: str = typer.Option("", "--rationale"),
+    request_id: str = typer.Option("", "--request-id"),
 ) -> None:
     """Call one registered tool under the project permission policy."""
     try:
-        parsed = json.loads(parameters)
+        if parameters_file and parameters != "{}":
+            raise ValueError("Use --parameters or --parameters-file, not both")
+        parsed = json.loads(parameters_file.read_text() if parameters_file else parameters)
         if not isinstance(parsed, dict):
             raise ValueError("parameters must be a JSON object")
         action = {"tool": name, "parameters": parsed}
-        result = _execute_project_action(_project(project_path), "tool", action, explicitly_approved=approve)
-    except (json.JSONDecodeError, ProjectError, ValueError) as exc:
+        result = _execute_project_action(_project(project_path), "tool", action, explicitly_approved=approve,
+                                        target_ids=target_ids, research_question=research_question,
+                                        rationale=rationale, request_id=request_id)
+    except (OSError, json.JSONDecodeError, ProjectError, ValueError) as exc:
         code = "E_APPROVAL_REQUIRED" if "approval required" in str(exc).lower() else "E_TOOL"
         _fail("tool call", code, str(exc), json_output=json_output, exit_code=4 if code == "E_APPROVAL_REQUIRED" else 2)
-    _emit("tool call", result, json_output=json_output)
+    _emit_action("tool call", result, json_output)
 
 
 @exec_app.command("python")
@@ -564,7 +577,7 @@ def exec_python(
     except (OSError, ProjectError, ValueError) as exc:
         code_name = "E_APPROVAL_REQUIRED" if "approval required" in str(exc).lower() else "E_EXECUTION"
         _fail("exec python", code_name, str(exc), json_output=json_output, exit_code=4 if code_name == "E_APPROVAL_REQUIRED" else 2)
-    _emit("exec python", result, json_output=json_output)
+    _emit_action("exec python", result, json_output)
 
 
 @exec_app.command("command")
@@ -582,7 +595,7 @@ def exec_command(
     except (ProjectError, ValueError) as exc:
         code_name = "E_APPROVAL_REQUIRED" if "approval required" in str(exc).lower() else "E_EXECUTION"
         _fail("exec command", code_name, str(exc), json_output=json_output, exit_code=4 if code_name == "E_APPROVAL_REQUIRED" else 2)
-    _emit("exec command", result, json_output=json_output)
+    _emit_action("exec command", result, json_output)
 
 
 def help_command(
@@ -602,11 +615,16 @@ def capability_skill(
     output: Path | None = typer.Option(None, "--output", "-o"),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Export an Agent Skill generated from the command schema."""
+    """Export the complete maintained Skill bundle and its supporting references."""
     content = skill_markdown()
     if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(content, encoding="utf-8")
+        destination = output.parent if output.suffix == ".md" else output
+        destination.mkdir(parents=True, exist_ok=True)
+        if destination.resolve() != skill_source_dir().resolve():
+            shutil.copytree(skill_source_dir(), destination, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        if output.suffix == ".md":
+            output.write_text(content, encoding="utf-8")
     data = {"output": str(output.resolve()) if output else None, "content": None if output else content}
     _emit("capability skill", data, json_output=json_output, text=content if not output else f"Wrote {output}")
 
@@ -630,6 +648,8 @@ def mcp_serve(
 
 
 def register_cli(app: typer.Typer) -> None:
+    from retroagent.skill_commands import research_app
+    app.add_typer(research_app, name="research")
     app.add_typer(project_app, name="project")
     app.add_typer(agent_app, name="agent")
     app.add_typer(checkpoint_app, name="checkpoint")
@@ -698,96 +718,20 @@ def _run_agent(
     return result
 
 
-def _execute_project_action(
-    project: ResearchProject,
-    action_type: str,
-    action: dict[str, Any],
-    *,
-    explicitly_approved: bool,
-) -> dict[str, Any]:
-    from retroagent.run.retro import _build_environment
-
-    manifest = project.load_manifest()
-    grant = PermissionGrant(
-        mode=PermissionMode(manifest.permission_mode),
-        scopes=set(manifest.permission_scopes or []),
-    )
-    policy_action = {"type": action_type, **action}
-    authorization = PolicyEngine().authorize(policy_action, grant)
-    ledger = project.ledger()
-    if not authorization.allowed:
-        if not authorization.requires_approval:
-            raise ProjectError(authorization.reason)
-        if not explicitly_approved:
-            decision = {
-                "action_type": action_type,
-                "action": action,
-                "target_ids": [],
-                "estimated_cost": {"time_minutes": 0, "compute": "unknown"},
-            }
-            ledger.append("approval_requested", {
-                "action": policy_action,
-                "decision": decision,
-                "required_scope": authorization.required_scope,
-                "reason": authorization.reason,
-            }, actor="controller")
-            project.set_status("awaiting_approval")
-            raise ProjectError(f"Approval required for scope '{authorization.required_scope}'")
-        request = ledger.append("approval_requested", {
-            "action": policy_action,
-            "decision": {"action_type": action_type, "action": action, "target_ids": []},
-            "required_scope": authorization.required_scope,
-            "reason": "Explicit CLI approval",
-        }, actor="controller")
-        ledger.append("approval_granted", {
-            "scope": authorization.required_scope,
-            "action": policy_action,
-            "one_time": True,
-        }, actor="user", causal_parent_id=request.id)
-    cycle = max((event.cycle for event in ledger.events), default=0) + 1
-    ledger.append("execution_started", {"action": action}, actor="cli", cycle=cycle)
-    if action_type == "tool":
-        result = _build_environment().execute(action)
-    else:
-        executor = ResearchExecutor(project.runs_dir / "manual")
-        result = executor.execute_python(str(action.get("code", ""))) if action_type == "python" else executor.execute_command(str(action.get("command", "")))
-    ledger.append("execution_finished", {"action": action, "result": result}, actor="executor", cycle=cycle)
-    state = ledger.replay()
-    evidence_id = next_entity_id(state.evidence, "evidence")
-    ledger.append("evidence_added", {
-        "id": evidence_id,
-        "direction": "observes",
-        "summary": _result_summary(result),
-        "source": str(action.get("tool", action_type)),
-        "confidence": 0.6 if result.get("returncode", 0) == 0 else 0.2,
-        "target_ids": [],
-        "result": _parse_output(result),
-    }, actor="assimilator", cycle=cycle)
-    project.set_status("active")
-    return {"action": policy_action, "result": result, "evidence_id": evidence_id}
+def _execute_project_action(project, action_type, action, *, explicitly_approved, **context):
+    from retroagent.skill_runtime import execute_action
+    return execute_action(project, action_type, action, explicitly_approved=explicitly_approved, **context)
 
 
-def _result_summary(result: dict[str, Any]) -> str:
-    parsed = _parse_output(result)
-    if isinstance(parsed, dict):
-        for key in ("summary", "error", "message"):
-            if parsed.get(key):
-                return str(parsed[key])[:500]
-    if result.get("exception_info"):
-        return str(result["exception_info"])[:500]
-    return str(parsed)[:500]
+def _emit_action(command, result, json_output):
+    if not result.get("success", True):
+        _fail(command, "E_ACTION_FAILED", "Action failed; inspect recorded evidence and result",
+              json_output=json_output, details=result, exit_code=3)
+    _emit(command, result, json_output=json_output)
 
 
-def _parse_output(result: dict[str, Any]) -> Any:
-    output = result.get("output")
-    if output is None:
-        return result
-    if isinstance(output, str):
-        try:
-            return json.loads(output)
-        except json.JSONDecodeError:
-            return output
-    return output
+
+
 
 
 def _contains_id(value: Any, identifier: str) -> bool:

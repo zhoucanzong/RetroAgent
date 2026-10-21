@@ -1,58 +1,80 @@
 ---
 name: retroagent
-description: Run auditable, evidence-seeking chemistry research with stable resources, approvals, replay, and deterministic tools.
+description: Investigate chemical mechanisms, propose retrosynthetic routes, compare reaction hypotheses, and choose informative experiments using auditable chemistry tools. Use for evidence-seeking chemistry research and synthesis planning.
 ---
 
 # RetroAgent
 
-Use the `retroagent` CLI for chemistry research projects. Start with `retroagent help --json` and
-`retroagent tool list --json`; do not guess command or tool parameters.
+You are the chemistry research Agent. This Skill supplies domain guidance and
+deterministic tools; you decide what to investigate, which tools to call, and
+how to revise a hypothesis. Do not start `agent run` or `agent resume` by default:
+those are legacy commands that start another LLM controller.
 
-## Strategy
+## Start With the Research Question
 
-1. L1 observe: use `status`, `events`, `view`, `query`, `explain`, and `validate`.
-2. L2 mutate structured research state: use `batch --dry-run` before `batch`.
-3. L3 execute code, system commands, or network tools only through policy-controlled commands.
-4. Address durable entities as `molecule:mol_0001`, `route:route_0001`, `reaction:rxn_0001`,
-   `hypothesis:hyp_0001`, `evidence:evidence_0001`, and `experiment:exp_0001`.
-5. After every mutation or execution, inspect the resulting events and validate the project.
-6. Never claim that a physical experiment or external action was rolled back. CLI atomicity applies to ledger state only.
+Identify the target structure or scientific claim, constraints, available data,
+and the decision the user needs. Ask only for information that would materially
+change the investigation. A descriptor lookup does not require a route portfolio
+or competing hypotheses. For uncertain mechanisms or new routes, formulate
+testable alternatives and identify an observation that would distinguish them.
 
-## Commands
+Use the tools already available in the host. For the RetroAgent backend, run
+`python <skill-dir>/scripts/retro.py help --json` and `tool list --json` to inspect
+the actual interface. This helper uses `RETROAGENT_PYTHON` when set, otherwise an
+installed `retroagent` executable. If the backend is absent, follow
+[runtime.md](references/runtime.md); do not pretend a calculation ran.
 
-- `project init`: Create a persistent .retroagent research workspace. Risk: `low`.
-- `status`: Inspect project, run, entity, and pending-approval status. Risk: `low`.
-- `agent run`: Start an autonomous evidence-seeking chemistry loop. Risk: `controlled`.
-- `agent resume`: Resume a ledger-backed run, including an approved pending action. Risk: `controlled`.
-- `agent stop`: Mark a project stopped without deleting its ledger. Risk: `low`.
-- `approve`: Approve exactly one pending high-risk action. Risk: `high`.
-- `reject`: Reject a pending action and require replanning. Risk: `low`.
-- `events`: Read the append-only research event stream. Risk: `low`.
-- `view`: Render project or stable resources as text, JSON, HTML, SVG, or PNG. Risk: `low`.
-- `query`: Filter resources using deterministic field predicates. Risk: `low`.
-- `explain`: Resolve an entity and show linked events and evidence. Risk: `low`.
-- `validate`: Validate manifest, ledger replay, references, and approval state. Risk: `low`.
-- `batch`: Atomically apply structured state operations; supports dry-run. Risk: `controlled`.
-- `checkpoint create`: Snapshot the current event ledger. Risk: `low`.
-- `checkpoint diff`: Compare current or checkpoint-projected research states. Risk: `low`.
-- `checkpoint restore`: Restore state after creating an automatic backup checkpoint. Risk: `high`.
-- `replay`: Rebuild deterministic research state from ledger events. Risk: `low`.
-- `tool list`: List registered chemistry tools and JSON parameter schemas. Risk: `low`.
-- `tool call`: Call a registered chemistry tool under project permissions. Risk: `policy`.
-- `exec python`: Run temporary Python in the project run workspace. Risk: `high`.
-- `exec command`: Run a system command in the project run workspace. Risk: `high`.
-- `help`: Return this machine-readable command schema. Risk: `low`.
-- `capability skill`: Export an agent Skill generated from this schema. Risk: `low`.
-- `capability mcp`: Describe MCP tools generated from this schema. Risk: `low`.
-- `mcp serve`: Expose the same CLI contract through MCP stdio. Risk: `policy`.
+For an ongoing study, inspect `research context --project PATH --json` and relevant
+evidence before choosing the next action. For a new study, use `project init PATH`,
+then `research start TASK --project PATH --json`. No separate LLM API key is needed
+for host-driven research or local chemistry tools.
 
-## Structured Output
+## Choose Actions From the Evidence
 
-Add `--json` for a stable envelope. Success returns `ok=true`; failures return `ok=false` with a
-machine-readable error code. The append-only ledger is `.retroagent/ledger.jsonl`.
+- Use [discovery.md](references/discovery.md) for mechanism discrimination, new
+  route hypotheses, uncertainty, and experiment selection.
+- Use [models.md](references/models.md) when neural retrosynthesis would help.
+  NeuralLoc, R-SMILES 2, and RetroChimera are optional tools, not a fixed sequence.
+- Use [evidence.md](references/evidence.md) for recording hypotheses, linking
+  results, interpreting failures, resuming a study, and completing a report.
 
-## Approval
+Choose the next action for its ability to resolve a specific uncertainty relative
+to its cost. You may search literature, inspect structures, compare predictions,
+write and run analysis code, or request missing experimental observations.
+Use the host's code and system tools under its existing authorization. Archive
+calculations used as evidence with their inputs, outputs, versions and assumptions;
+the backend's `exec python` and `exec command` can do this when appropriate.
 
-When a command returns `E_APPROVAL_REQUIRED`, stop and request human approval. After `retroagent approve`,
-use `retroagent agent resume`; approval applies only to the exact pending action unless the project was
-explicitly initialized with full permission scopes.
+Read the result, update the relevant hypotheses, and decide what to do next.
+Negative evidence should change the route or the question. Do not repeat a failed
+action unchanged without a reason supported by new evidence or a repaired runtime.
+When no useful action is available, report the specific uncertainty or blocker.
+
+## Preserve Evidence and User Control
+
+Record brief decision rationales and falsifiable predictions, not just a final
+answer. Link tool calls with `--target ID`, `--question` and `--rationale` when
+those entities exist. Tool results update the same ledger used by the legacy
+controller. Inspect `success`, exit status, error details and evidence IDs; a
+transport-level response alone does not mean the tool succeeded.
+
+Do not treat a model rank, novelty distance, catalog absence, atom mapping, or a
+validator's `passed` label as proof of experimental feasibility. Numerical Bayes
+updates and information-gain rankings are conditional on the supplied priors and
+likelihoods. Label uncalibrated assumptions and untested routes explicitly.
+
+The Skill does not expand permissions. Honor existing explicit user grants and
+host policy; do not approve your own requests or set full scopes without user
+authorization. When backend approval is needed, the user may approve the exact
+action, after which retry that same call. Do not start the legacy agent to resume it.
+To abandon your own pending action, use `research withdraw --reason TEXT`; do not
+attribute that decision to the user through `reject`.
+
+## Deliver an Inspectable Conclusion
+
+State the supported conclusion, its evidence IDs, remaining uncertainty, and what
+would falsify it. For proposed synthesis, distinguish predicted transformations
+from validated steps and identify the next discriminating check. Save a conclusion
+with `research finish CONCLUSION.json --project PATH --json` when the requested
+study is complete; unresolved work can remain in the ledger for the next session.
+Do not claim physical synthesis or a newly discovered reaction from software tests.

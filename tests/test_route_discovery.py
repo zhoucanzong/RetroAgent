@@ -139,6 +139,15 @@ class RouteDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(result["validation_reports"][0]["status"], "failed")
 
+    def test_placeholder_conditions_cannot_satisfy_validation(self):
+        route = _portfolio()["routes"][0]
+        result = validate_route_portfolio(
+            target_smiles=TARGET, routes=[route], required_checks=["conditions"],
+            condition_reports=[{"reaction_id": "rxn_ester", "catalyst": "to be determined",
+                                "solvent": "to be determined", "temperature": "to be determined"}],
+        )
+        self.assertEqual(result["validation_reports"][0]["status"], "needs-evidence")
+
     def test_tools_return_machine_readable_contracts(self):
         portfolio_tool = RoutePortfolioTool()
         validator_tool = IndependentRouteValidatorTool()

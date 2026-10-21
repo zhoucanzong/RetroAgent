@@ -20,7 +20,12 @@ class ConditionTool:
         reaction_class = parameters.get("reaction_classification", "")
 
         conditions = self._lookup_conditions(reaction_class, product, precursors)
-        return json.dumps({"conditions": conditions}, ensure_ascii=False)
+        missing = any(value == "to be determined" for value in conditions.values())
+        return json.dumps({
+            "conditions": conditions,
+            "status": "needs-evidence" if missing else "heuristic-suggestion",
+            "experimentally_validated": False,
+        }, ensure_ascii=False)
 
     def parameters_schema(self) -> dict:
         return {

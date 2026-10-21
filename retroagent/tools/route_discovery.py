@@ -483,10 +483,18 @@ def _condition_check(reactions: list[dict[str, Any]], conditions: dict[str, dict
         report = conditions.get(str(reaction.get("id", "")))
         if report is None:
             return "missing"
-        if not report.get("solvent") or report.get("temperature") in {None, ""}:
-            return "fail"
+        if report.get("status") == "needs-evidence":
+            return "missing"
+        fields = [report.get("solvent"), report.get("temperature"),
+                  report.get("reagent") or report.get("reagents") or report.get("catalyst")]
+        if any(value is None or value == "" or
+               isinstance(value, str) and value.strip().lower() in {"to be determined", "tbd", "unknown", "n/a"}
+               for value in fields):
+            return "missing"
+        if not report.get("solvent"):
+            return "missing"
         if not (report.get("reagent") or report.get("reagents") or report.get("catalyst")):
-            return "fail"
+            return "missing"
     return "pass"
 
 

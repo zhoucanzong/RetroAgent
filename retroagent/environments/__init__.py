@@ -15,6 +15,29 @@ from pydantic import BaseModel
 from retroagent.tool_graph import summarize_tool_graph
 
 
+class _DeferredTool:
+    def __init__(self, tool_class, factory):
+        self.description = tool_class.description
+        self.examples = getattr(tool_class, "examples", None)
+        # Registered schemas are stateless and must be readable before model loading.
+        self._schema = tool_class.parameters_schema(None)
+        self._factory = factory
+        self._instance = None
+
+    def parameters_schema(self):
+        return self._schema
+
+    def execute(self, parameters):
+        if self._instance is None:
+            self._instance = self._factory()
+        return self._instance.execute(parameters)
+
+    def close(self):
+        if self._instance is not None and hasattr(self._instance, "close"):
+            self._instance.close()
+        self._instance = None
+
+
 class RetroEnvConfig(BaseModel):
     timeout: int = 120
     cwd: str = ""
@@ -35,6 +58,14 @@ class RetroEnvironment:
 
     def register(self, name: str, tool: Any) -> None:
         self._tools[name] = tool
+
+    def register_lazy(self, name: str, tool_class: type, factory) -> None:
+        self._tools[name] = _DeferredTool(tool_class, factory)
+
+    def close(self) -> None:
+        for tool in self._tools.values():
+            if hasattr(tool, "close"):
+                tool.close()
 
     def execute(self, action: dict) -> dict[str, Any]:
         tool_name = action.get("tool", "bash")

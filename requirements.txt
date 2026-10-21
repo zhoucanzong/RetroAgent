@@ -1,4 +1,5 @@
 # Core dependencies
+filelock>=3.13
 rdkit>=2023.9.6
 onnxruntime>=1.18.0
 h5py>=3.11.0

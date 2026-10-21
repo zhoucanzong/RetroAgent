@@ -374,3 +374,16 @@ RetroAgent 的目标不只是复现已知逆合成路线，而是逐步发展成
 - 真实模型验证：NeuralLoc 独立入口返回 5 项，冷启动加推理 199.02 秒；Transformer 独立入口默认参数返回 5 项，5.51 秒。两份输出原样用于融合，得到 5 项候选，首位具有两个来源支持。保存于 `neuralloc_standalone.json / transformer_standalone.json / standalone_fusion.json`。
 - 神经环境的正式 CLI 已暴露 32 个工具，`transformer_predict --json` 真实执行、纯 JSON 解析和证据写入通过。脚本模型 Controller 测试验证可自主选择两个独立工具而不被要求调用集成；统计中预测/融合不再计作化学验证。
 - 原开发环境和神经运行环境各自通过 192 项回归；更新 README 中英文架构、模型入口说明、能力状态，以及 `docs/retrochimera-cpu.md` 的复现命令。尚未把软件通过或模型共识当成真实新路线可行性的证明。
+
+### 2026-10-22 Skill 版本发布
+
+- 按用户要求从 `main` 创建独立 `skill` 分支，版本升级为 0.3.0。宿主 Agent 直接负责化学研究决策；默认不通过 `agent run/resume` 启动第二个 LLM 循环，原独立 Agent 作为兼容入口保留。
+- 重写 `skills/retroagent/SKILL.md` 为研究方法与工具选择指导，新增 discovery、models、evidence、runtime 四份按需参考文档及可配置 Python 环境的转发脚本。Skill 正文不再由命令 schema 生成，工具 schema 仍由运行时维护。
+- 新增 `research start/context/finish/withdraw`：无需 LLM API key 即可记录研究目标、恢复状态、提交有证据引用的结论、撤回 Agent 自己的待审批动作。
+- 抽出 `ResearchResultRecorder`，Controller 和宿主工具调用共用反应/路线、实验、后验、验证、失败与重规划事件处理。宿主执行结果在项目锁内原子归档，异常派生事件不部分落盘；request_id 支持完成请求重放和重复请求防护，未完成请求不盲目重试。
+- 后端支持用户批准后精确重试原调用并消费一次性授权，避免为恢复一个工具动作启动内部 Agent。新增独立撤回事件，区分 Agent 放弃请求与真实用户拒绝。
+- ONNX/模板/库存工具改为延迟初始化，工具 schema 查询不加载权重。MCP 新增持久 `retroagent_tool` 和 `retroagent_tools`，保留兼容命令桥；重模型可以在同一服务进程复用，退出时释放资源，诊断输出与协议 JSON 分离。
+- `capability skill --output PATH` 导出完整 Skill 目录；构建阶段把同一份 canonical Skill 放入 wheel，避免维护重复正文。版本及包许可元数据与项目 Apache-2.0 LICENSE 对齐。
+- 独立 Agent 完成离线乙酸乙酯双路线行为测试，真实执行 7 个工具观测并记录有保留条件的结论；没有虚称实验验证。根据测试修复审批撤回归属、条件缺证据标记、任意默认置信度和运行版本记录问题；针对性重测确认修复。
+- 两套 Python 环境的完整测试均为 208 项通过。真实持久 MCP 连续对两个不同目标运行 Transformer，各返回 3 个候选，仅加载模型一次，归档 2 条证据和 6 条反应。Skill 校验、wheel 安装导出、编译和 diff 检查通过。
+- README 已替换为 Skill 分支的架构、安装、宿主研究接口、MCP、可选模型与兼容说明；验证证据汇总在 `docs/skill-release-verification.md`。模型权重、个人配置与原始运行日志继续忽略。

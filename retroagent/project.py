@@ -289,7 +289,7 @@ def unresolved_approval(events: Iterable[ResearchEvent]) -> PendingApproval | No
     for event in events:
         if event.type == "approval_requested":
             requests[event.id] = event
-        elif event.type in {"approval_granted", "approval_denied"} and event.causal_parent_id:
+        elif event.type in {"approval_granted", "approval_denied", "approval_withdrawn"} and event.causal_parent_id:
             resolved.add(event.causal_parent_id)
     for event_id, event in reversed(list(requests.items())):
         if event_id in resolved:
@@ -345,7 +345,13 @@ BATCH_OPERATIONS: dict[str, tuple[str, str, str]] = {
 }
 
 
-def apply_batch(
+def apply_batch(project, actions, *, dry_run=False, actor="cli"):
+    from retroagent.skill_runtime import project_lock
+    with project_lock(project):
+        return _apply_batch(project, actions, dry_run=dry_run, actor=actor)
+
+
+def _apply_batch(
     project: ResearchProject,
     actions: list[dict[str, Any]],
     *,

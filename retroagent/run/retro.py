@@ -218,7 +218,7 @@ def _build_environment() -> RetroEnvironment:
 
     # Disconnection tool (ONNX expansion policy)
     if cfg.expansion_model_path and cfg.expansion_model_path.exists():
-        env.register("disconnect", DisconnectionTool(
+        env.register_lazy("disconnect", DisconnectionTool, lambda: DisconnectionTool(
             model_path=str(cfg.expansion_model_path),
             templates_path=str(cfg.templates_path) if cfg.templates_path else "",
             ringbreaker_model_path=str(cfg.ringbreaker_model_path) if cfg.ringbreaker_model_path else None,
@@ -227,25 +227,25 @@ def _build_environment() -> RetroEnvironment:
 
     # Proposal tool (template application)
     if cfg.templates_path and cfg.templates_path.exists():
-        env.register("propose", ProposalTool(
+        env.register_lazy("propose", ProposalTool, lambda: ProposalTool(
             templates_path=str(cfg.templates_path),
             filter_model_path=str(cfg.filter_model_path) if cfg.filter_model_path else None,
         ))
 
     # Evaluation tool (feasibility + stock scoring)
     if cfg.filter_model_path and cfg.filter_model_path.exists():
-        env.register("evaluate", EvaluationTool(
+        env.register_lazy("evaluate", EvaluationTool, lambda: EvaluationTool(
             filter_model_path=str(cfg.filter_model_path),
             stock_path=str(cfg.stock_path) if cfg.stock_path else None,
         ))
 
     # Stock tool
     if cfg.stock_path and cfg.stock_path.exists():
-        env.register("check_stock", StockTool(str(cfg.stock_path)))
+        env.register_lazy("check_stock", StockTool, lambda: StockTool(str(cfg.stock_path)))
 
     # Literature tool
     if cfg.templates_path and cfg.templates_path.exists():
-        env.register("search_literature", LiteratureTool(templates_path=str(cfg.templates_path)))
+        env.register_lazy("search_literature", LiteratureTool, lambda: LiteratureTool(templates_path=str(cfg.templates_path)))
 
     # Condition tool (always available, rule-based)
     env.register("recommend_conditions", ConditionTool())

@@ -4,7 +4,7 @@ RetroAgent: LLM-driven retrosynthetic planning with dedicated chemistry tools.
 Built on mini-swe-agent's agent control loop and AiZynthFinder's chemistry models.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from pathlib import Path
 
